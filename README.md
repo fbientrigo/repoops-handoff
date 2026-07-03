@@ -43,6 +43,8 @@ Detect dirty worktrees and deliver a concise report.
 
 Add safe fetch, ahead/behind status, and multi-machine snapshots.
 
+Safe fetch, ahead/behind status, and an attention score are landed. Multi-machine snapshot comparison is still out of scope.
+
 ### v2: Motorcycle
 
 Add allowlisted tests, artifact scanning, and dependency drift checks.
@@ -101,68 +103,58 @@ defaults:
   include_clean_repos: false
   report_dir: ~/.local/share/repoops/reports
   snapshot_dir: ~/.local/share/repoops/snapshots
+  remote_check: true      # compute upstream/ahead/behind from local refs
+  fetch: false             # true permits `git fetch --prune` before computing ahead/behind
+  fetch_timeout_seconds: 20
 
 notifications:
-  enabled: true
-  channel: telegram  # telegram | slack | email | none
-
-  telegram:
-    bot_token_env: REPOOPS_TELEGRAM_BOT_TOKEN
-    chat_id_env: REPOOPS_TELEGRAM_CHAT_ID
-
-  slack:
-    webhook_url_env: REPOOPS_SLACK_WEBHOOK_URL
-
-  email:
-    smtp_host_env: REPOOPS_SMTP_HOST
-    smtp_port_env: REPOOPS_SMTP_PORT
-    username_env: REPOOPS_SMTP_USERNAME
-    password_env: REPOOPS_SMTP_PASSWORD
-    from_env: REPOOPS_EMAIL_FROM
-    to_env: REPOOPS_EMAIL_TO
+  enabled: false
+  channel: none  # telegram | slack | email | none
 
 repos:
   - name: dihiggs
     path: ~/dihiggs
-    group: physics
 
   - name: aws-climate
     path: ~/aws
-    group: cloud
 
   - name: apolo-rag
     path: ~/apolo_rag
-    group: apolo
 
   - name: vectorjobs
     path: ~/vectorjobs
-    group: apolo
 ```
 
 ## Planned CLI
 
 ```bash
 repoops scan --config examples/repos.yaml
+repoops scan --config examples/repos.yaml --fetch
 repoops run --config examples/repos.yaml
+repoops run --config examples/repos.yaml --fetch
 repoops notify --config examples/repos.yaml --report ~/.local/share/repoops/reports/latest.md
 ```
 
 ### `repoops scan`
 
-Scans configured repositories and prints a concise terminal table.
+Scans configured repositories and prints a concise terminal table, including `Ahead`/`Behind`/`Score` columns.
 
 ### `repoops run`
 
-Runs the full v0 workflow:
+Runs the full workflow:
 
 1. scan repositories;
 2. write JSON snapshot;
-3. write Markdown report;
+3. write Markdown report (with an "Attention summary" sorted by score);
 4. optionally send notification.
 
 ### `repoops notify`
 
 Sends an already-generated report through the configured notification backend.
+
+### `--fetch`
+
+Both `scan` and `run` accept `--fetch` to force a safe `git fetch --prune` before computing ahead/behind status. It only updates local remote-tracking refs — never the working tree, never `git pull`. Without `--fetch`, the config default (`defaults.fetch`, `false` unless set) applies. See `docs/CLI_CONTRACT.md` and `docs/SAFETY_CONTRACT.md` for the full contract.
 
 ## Example Terminal Output
 
@@ -213,7 +205,7 @@ Report:
 
 ```json
 {
-  "schema_version": "repoops.snapshot.v0",
+  "schema_version": "repoops.snapshot.v1",
   "machine": "nasapcdeb",
   "timestamp": "2026-06-25T09:00:00-04:00",
   "repos": [
@@ -240,8 +232,17 @@ Report:
       "risk_flags": [
         "dirty",
         "untracked_files",
-        "source_changes"
-      ]
+        "ahead_remote"
+      ],
+      "remote": {
+        "has_upstream": true,
+        "upstream": "origin/main",
+        "ahead": 2,
+        "behind": 0,
+        "fetched": false,
+        "fetch_error": null
+      },
+      "attention_score": 40
     }
   ]
 }
@@ -249,7 +250,7 @@ Report:
 
 ## Risk Flags
 
-v0 should classify simple risk flags without using an LLM:
+`repoops` classifies simple risk flags without using an LLM:
 
 * `dirty`
 * `staged_changes`
@@ -263,6 +264,35 @@ v0 should classify simple risk flags without using an LLM:
 * `repo_missing`
 * `not_git_repo`
 * `detached_head`
+* `ahead_remote`
+* `behind_remote`
+* `diverged_remote`
+* `no_upstream`
+* `fetch_failed`
+
+## Cron Example
+
+```cron
+# Every 15 minutes, low-noise: no network access, local refs only.
+*/15 * * * * /usr/bin/env repoops run --config /home/fabian/.config/repoops/repos.yaml
+
+# Once an hour, refresh remote-tracking refs before computing ahead/behind.
+0 * * * * /usr/bin/env repoops run --config /home/fabian/.config/repoops/repos.yaml --fetch
+```
+
+By default `repoops` never touches the network — `defaults.fetch` is `false` and `--fetch` must be passed explicitly (or set in config) to permit `git fetch --prune`. Every other run is entirely local, read-only Git metadata inspection.
+
+## Windows (PowerShell / Task Scheduler)
+
+```powershell
+# No-fetch, local refs only:
+repoops run --config C:\Users\fabian\.config\repoops\repos.yaml
+
+# Refresh remote-tracking refs before computing ahead/behind:
+repoops run --config C:\Users\fabian\.config\repoops\repos.yaml --fetch
+```
+
+Register either line as the action of a Windows Task Scheduler task (Trigger: e.g. "Daily, repeat every 15 minutes") instead of cron. `repoops` exits `0` on a completed scan and writes no output beyond the printed table and the JSON/Markdown artifacts, so it is safe to run non-interactively from a scheduled task.
 
 ## Safety Principles
 
@@ -281,7 +311,6 @@ Notification output must avoid leaking secrets. It should never include file con
 * Rich
 * Pydantic
 * PyYAML
-* HTTPX
 * standard library `subprocess`
 * pytest for tests
 * ruff for linting
@@ -319,8 +348,9 @@ Notification output must avoid leaking secrets. It should never include file con
 
 ### v1
 
-* Safe `git fetch`.
-* Ahead/behind status.
+* Safe `git fetch`. ✅
+* Ahead/behind status. ✅
+* Attention score and updated reports. ✅
 * Multi-machine snapshot comparison.
 
 ### v2

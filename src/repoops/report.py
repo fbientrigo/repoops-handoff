@@ -10,6 +10,18 @@ def _repo_should_render(repo: RepoSnapshot, *, include_clean_repos: bool) -> boo
     return include_clean_repos or repo.dirty or not repo.exists or not repo.is_git_repo
 
 
+def _attention_repos(snapshot: Snapshot) -> list[RepoSnapshot]:
+    return sorted(
+        (repo for repo in snapshot.repos if repo.attention_score > 0),
+        key=lambda repo: repo.attention_score,
+        reverse=True,
+    )
+
+
+def _optional_int(value: int | None) -> str:
+    return "-" if value is None else str(value)
+
+
 def render_markdown(snapshot: Snapshot, *, include_clean_repos: bool = True) -> str:
     """Render a Markdown report from a snapshot."""
     lines: list[str] = []
@@ -25,7 +37,9 @@ def render_markdown(snapshot: Snapshot, *, include_clean_repos: bool = True) -> 
     missing_count = sum(1 for repo in snapshot.repos if not repo.exists)
     non_git_count = sum(1 for repo in snapshot.repos if repo.exists and not repo.is_git_repo)
     clean_omitted = sum(
-        1 for repo in snapshot.repos if not _repo_should_render(repo, include_clean_repos=include_clean_repos)
+        1
+        for repo in snapshot.repos
+        if not _repo_should_render(repo, include_clean_repos=include_clean_repos)
     )
 
     lines.append("## Summary")
@@ -35,6 +49,23 @@ def render_markdown(snapshot: Snapshot, *, include_clean_repos: bool = True) -> 
     lines.append(f"- Non-Git directories: `{non_git_count}`")
     if clean_omitted:
         lines.append(f"- Clean repos omitted: `{clean_omitted}`")
+    lines.append("")
+
+    lines.append("## Attention summary")
+    lines.append("")
+    attention_repos = _attention_repos(snapshot)
+    if attention_repos:
+        lines.append("| Repo | Score | Branch | HEAD | Ahead | Behind | Risk flags |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+        for repo in attention_repos:
+            risk_flags = ", ".join(f"`{flag}`" for flag in repo.risk_flags) or "none"
+            lines.append(
+                f"| {repo.name} | {repo.attention_score} | {repo.branch or 'n/a'} | "
+                f"{repo.head or 'n/a'} | {_optional_int(repo.remote.ahead)} | "
+                f"{_optional_int(repo.remote.behind)} | {risk_flags} |"
+            )
+    else:
+        lines.append("No repositories currently need attention.")
     lines.append("")
 
     lines.append("## Repositories")
@@ -71,6 +102,17 @@ def _render_repo(repo: RepoSnapshot) -> list[str]:
     if repo.notable_files:
         lines.append("- Notable files:")
         lines.extend(f"  - `{path}`" for path in repo.notable_files)
+    lines.append(f"- Attention score: `{repo.attention_score}`")
+    remote_line = (
+        "- Remote: "
+        f"upstream=`{repo.remote.upstream or 'n/a'}`, "
+        f"ahead=`{_optional_int(repo.remote.ahead)}`, "
+        f"behind=`{_optional_int(repo.remote.behind)}`, "
+        f"fetched=`{repo.remote.fetched}`"
+    )
+    if repo.remote.fetch_error:
+        remote_line += f", fetch_error=`{repo.remote.fetch_error}`"
+    lines.append(remote_line)
     return lines
 
 
@@ -84,6 +126,9 @@ def print_summary_table(snapshot: Snapshot, *, console: Console | None = None) -
     table.add_column("HEAD")
     table.add_column("Counts")
     table.add_column("Risk")
+    table.add_column("Ahead")
+    table.add_column("Behind")
+    table.add_column("Score")
 
     for repo in snapshot.repos:
         if not repo.exists:
@@ -110,6 +155,9 @@ def print_summary_table(snapshot: Snapshot, *, console: Console | None = None) -
             repo.head or "-",
             counts,
             ", ".join(repo.risk_flags) or "-",
+            _optional_int(repo.remote.ahead),
+            _optional_int(repo.remote.behind),
+            str(repo.attention_score),
         )
 
     console.print(table)

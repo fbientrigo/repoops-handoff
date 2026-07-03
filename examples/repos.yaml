@@ -12,26 +12,9 @@ notifications:
   enabled: false
   channel: none  # telegram | slack | email | none
 
-  telegram:
-    bot_token_env: REPOOPS_TELEGRAM_BOT_TOKEN
-    chat_id_env: REPOOPS_TELEGRAM_CHAT_ID
-
-  slack:
-    webhook_url_env: REPOOPS_SLACK_WEBHOOK_URL
-
-  email:
-    smtp_host_env: REPOOPS_SMTP_HOST
-    smtp_port_env: REPOOPS_SMTP_PORT
-    username_env: REPOOPS_SMTP_USERNAME
-    password_env: REPOOPS_SMTP_PASSWORD
-    from_env: REPOOPS_EMAIL_FROM
-    to_env: REPOOPS_EMAIL_TO
-
 repos:
   - name: dihiggs
     path: ~/dihiggs
-    group: physics
 
   - name: aws-climate
     path: ~/aws
-    group: cloud

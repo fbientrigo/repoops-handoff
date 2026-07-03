@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, Field
 
 from repoops.config import RepoConfig, RepoOpsConfig
 
-SNAPSHOT_SCHEMA_VERSION = "repoops.snapshot.v0"
+SNAPSHOT_SCHEMA_VERSION = "repoops.snapshot.v1"
 
-ALLOWED_GIT_COMMANDS: set[tuple[str, ...]] = {
-    ("rev-parse", "--is-inside-work-tree"),
-    ("rev-parse", "--abbrev-ref", "HEAD"),
-    ("rev-parse", "--short", "HEAD"),
-    ("status", "--porcelain=v1"),
-}
+# Only these exact read-only, metadata-only argument tuples may ever be run via _run_git.
+ALLOWED_GIT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("rev-parse", "--is-inside-work-tree"),
+        ("rev-parse", "--abbrev-ref", "HEAD"),
+        ("rev-parse", "--short", "HEAD"),
+        ("status", "--porcelain=v1"),
+        ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
+        ("rev-list", "--count", "@{u}..HEAD"),
+        ("rev-list", "--count", "HEAD..@{u}"),
+    }
+)
+
+# `git fetch` is kept in a separate whitelist and separate runner from _run_git: it is the
+# only command in this module that touches the network, so it must never be reachable by
+# broadening ALLOWED_GIT_COMMANDS alone.
+ALLOWED_FETCH_COMMANDS: frozenset[tuple[str, ...]] = frozenset({("fetch", "--prune")})
 
 CONFLICT_CODES = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
 
@@ -35,7 +48,31 @@ RiskFlag = Literal[
     "repo_missing",
     "not_git_repo",
     "detached_head",
+    "ahead_remote",
+    "behind_remote",
+    "diverged_remote",
+    "no_upstream",
+    "fetch_failed",
 ]
+
+ATTENTION_POINTS: dict[str, int] = {
+    "repo_missing": 100,
+    "not_git_repo": 90,
+    "possible_secret_file": 70,
+    "fetch_failed": 65,
+    "deleted_files": 50,
+    "diverged_remote": 45,
+    "ahead_remote": 40,
+    "behind_remote": 35,
+    "dirty": 30,
+    "many_changes": 25,
+    "no_upstream": 10,
+    "untracked_files": 10,
+}
+CONFLICTED_ATTENTION_POINTS = 80
+
+_URL_PATTERN = re.compile(r"\S+://\S+")
+_MAX_FETCH_ERROR_LENGTH = 200
 
 SECRET_COMPONENT_MARKERS = (
     ".env",
@@ -73,17 +110,6 @@ class ChangeCounts(BaseModel):
     renamed: int = 0
     conflicted: int = 0
 
-    @property
-    def total(self) -> int:
-        """Approximate total count used for human display."""
-        return (
-            self.modified
-            + self.staged
-            + self.untracked
-            + self.deleted
-            + self.renamed
-            + self.conflicted
-        )
 
 
 class PorcelainEntry(BaseModel):
@@ -103,6 +129,15 @@ class PorcelainSummary(BaseModel):
         return bool(self.entries)
 
 
+class RemoteSyncStatus(BaseModel):
+    has_upstream: bool = False
+    upstream: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
+    fetched: bool = False
+    fetch_error: str | None = None
+
+
 class RepoSnapshot(BaseModel):
     name: str
     path: str
@@ -114,6 +149,8 @@ class RepoSnapshot(BaseModel):
     counts: ChangeCounts = Field(default_factory=ChangeCounts)
     notable_files: list[str] = Field(default_factory=list)
     risk_flags: list[RiskFlag] = Field(default_factory=list)
+    remote: RemoteSyncStatus = Field(default_factory=RemoteSyncStatus)
+    attention_score: int = 0
 
 
 class Snapshot(BaseModel):
@@ -216,8 +253,10 @@ def classify_risk_flags(
     branch: str | None,
     summary: PorcelainSummary,
     many_changes_threshold: int = 20,
+    remote: RemoteSyncStatus | None = None,
+    remote_check: bool = True,
 ) -> list[RiskFlag]:
-    """Classify simple v0 risk flags."""
+    """Classify simple v1 risk flags."""
     flags: list[RiskFlag] = []
 
     if not exists:
@@ -247,12 +286,36 @@ def classify_risk_flags(
     if any(entry.path.endswith(".ipynb") for entry in summary.entries):
         flags.append("notebook_changed")
 
+    if remote_check and remote is not None:
+        ahead = remote.ahead or 0
+        behind = remote.behind or 0
+        if ahead > 0:
+            flags.append("ahead_remote")
+        if behind > 0:
+            flags.append("behind_remote")
+        if ahead > 0 and behind > 0:
+            flags.append("diverged_remote")
+        if not remote.has_upstream:
+            flags.append("no_upstream")
+        if remote.fetch_error is not None:
+            flags.append("fetch_failed")
+
     return flags
+
+
+def compute_attention_score(repo_snapshot: RepoSnapshot) -> int:
+    """Deterministic, pure attention score used to prioritize repos in reports."""
+    score = sum(ATTENTION_POINTS.get(flag, 0) for flag in repo_snapshot.risk_flags)
+    if repo_snapshot.counts.conflicted > 0:
+        score += CONFLICTED_ATTENTION_POINTS
+    return score
 
 
 def _is_dependency_file(path: str) -> bool:
     name = Path(path).name
-    return name in DEPENDENCY_FILENAMES or name.startswith("requirements-") and name.endswith(".txt")
+    if name in DEPENDENCY_FILENAMES:
+        return True
+    return name.startswith("requirements-") and name.endswith(".txt")
 
 
 def _is_ci_file(path: str) -> bool:
@@ -265,10 +328,9 @@ def _is_ci_file(path: str) -> bool:
 
 
 def _run_git(repo_path: Path, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
-    """Run an allow-listed read-only Git command."""
+    """Run a whitelisted, read-only Git command."""
     if args not in ALLOWED_GIT_COMMANDS:
-        raise ValueError(f"Forbidden git command attempted: git {' '.join(args)}")
-
+        raise ValueError(f"Refusing to run non-whitelisted git command: git {' '.join(args)}")
     return subprocess.run(
         ["git", *args],
         cwd=repo_path,
@@ -276,6 +338,98 @@ def _run_git(repo_path: Path, args: tuple[str, ...]) -> subprocess.CompletedProc
         capture_output=True,
         text=True,
     )
+
+
+def _run_fetch(repo_path: Path, *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    """Run the single whitelisted `git fetch --prune`. Network op; opt-in only, caller-gated."""
+    args = ("fetch", "--prune")
+    if args not in ALLOWED_FETCH_COMMANDS:
+        raise ValueError("Refusing to run non-whitelisted fetch command")
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        env=env,
+    )
+
+
+def _sanitize_git_error(raw: str) -> str:
+    """Reduce raw stderr to a short, credential-safe message. Safe by construction."""
+    stripped = (raw or "").strip()
+    first_line = stripped.splitlines()[0] if stripped else ""
+    redacted = _URL_PATTERN.sub("[REDACTED_URL]", first_line)
+    if not redacted:
+        return "git fetch failed (no error detail captured)"
+    if len(redacted) > _MAX_FETCH_ERROR_LENGTH:
+        return redacted[:_MAX_FETCH_ERROR_LENGTH] + "..."
+    return redacted
+
+
+class _FetchOutcome(NamedTuple):
+    ok: bool
+    error: str | None
+
+
+def _try_fetch(repo_path: Path, timeout_seconds: int) -> _FetchOutcome:
+    try:
+        proc = _run_fetch(repo_path, timeout_seconds=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        return _FetchOutcome(ok=False, error=f"git fetch timed out after {timeout_seconds}s")
+    except OSError as exc:
+        return _FetchOutcome(ok=False, error=_sanitize_git_error(str(exc)))
+    if proc.returncode != 0:
+        return _FetchOutcome(ok=False, error=_sanitize_git_error(proc.stderr))
+    return _FetchOutcome(ok=True, error=None)
+
+
+def resolve_fetch(cli_fetch: bool, config_fetch: bool) -> bool:
+    """CLI --fetch can only force fetch on; it never disables a config default."""
+    return cli_fetch or config_fetch
+
+
+def _remote_sync_status(
+    repo_path: Path,
+    *,
+    remote_check: bool,
+    fetch: bool,
+    fetch_timeout_seconds: int,
+) -> RemoteSyncStatus:
+    """Compute upstream/ahead/behind using local refs, optionally fetching first."""
+    if not remote_check:
+        return RemoteSyncStatus()
+
+    status = RemoteSyncStatus()
+
+    if fetch:
+        outcome = _try_fetch(repo_path, fetch_timeout_seconds)
+        status.fetched = outcome.ok
+        status.fetch_error = outcome.error
+
+    upstream_result = _run_git(
+        repo_path, ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    )
+    if upstream_result.returncode != 0 or not upstream_result.stdout.strip():
+        status.has_upstream = False
+        return status
+
+    status.has_upstream = True
+    status.upstream = upstream_result.stdout.strip()
+
+    ahead_result = _run_git(repo_path, ("rev-list", "--count", "@{u}..HEAD"))
+    behind_result = _run_git(repo_path, ("rev-list", "--count", "HEAD..@{u}"))
+    ahead_stdout = ahead_result.stdout.strip()
+    behind_stdout = behind_result.stdout.strip()
+    status.ahead = (
+        int(ahead_stdout) if ahead_result.returncode == 0 and ahead_stdout.isdigit() else None
+    )
+    status.behind = (
+        int(behind_stdout) if behind_result.returncode == 0 and behind_stdout.isdigit() else None
+    )
+    return status
 
 
 def _notable_files(
@@ -294,48 +448,61 @@ def _notable_files(
     return notable
 
 
+def _finalize(snapshot: RepoSnapshot) -> RepoSnapshot:
+    """Compute attention_score last, once all other fields are set. RepoSnapshot is unfrozen."""
+    snapshot.attention_score = compute_attention_score(snapshot)
+    return snapshot
+
+
 def scan_repo(
     repo: RepoConfig,
     *,
     max_files_per_repo: int = 12,
     include_untracked: bool = True,
     many_changes_threshold: int = 20,
+    remote_check: bool = True,
+    fetch: bool = False,
+    fetch_timeout_seconds: int = 20,
 ) -> RepoSnapshot:
     """Scan a single repository using read-only Git commands."""
     repo_path = repo.path
     exists = repo_path.exists()
     if not exists:
         summary = PorcelainSummary()
-        return RepoSnapshot(
-            name=repo.name,
-            path=str(repo_path),
-            exists=False,
-            is_git_repo=False,
-            risk_flags=classify_risk_flags(
+        return _finalize(
+            RepoSnapshot(
+                name=repo.name,
+                path=str(repo_path),
                 exists=False,
                 is_git_repo=False,
-                branch=None,
-                summary=summary,
-                many_changes_threshold=many_changes_threshold,
-            ),
+                risk_flags=classify_risk_flags(
+                    exists=False,
+                    is_git_repo=False,
+                    branch=None,
+                    summary=summary,
+                    many_changes_threshold=many_changes_threshold,
+                ),
+            )
         )
 
     is_git_result = _run_git(repo_path, ("rev-parse", "--is-inside-work-tree"))
     is_git_repo = is_git_result.returncode == 0 and is_git_result.stdout.strip() == "true"
     if not is_git_repo:
         summary = PorcelainSummary()
-        return RepoSnapshot(
-            name=repo.name,
-            path=str(repo_path),
-            exists=True,
-            is_git_repo=False,
-            risk_flags=classify_risk_flags(
+        return _finalize(
+            RepoSnapshot(
+                name=repo.name,
+                path=str(repo_path),
                 exists=True,
                 is_git_repo=False,
-                branch=None,
-                summary=summary,
-                many_changes_threshold=many_changes_threshold,
-            ),
+                risk_flags=classify_risk_flags(
+                    exists=True,
+                    is_git_repo=False,
+                    branch=None,
+                    summary=summary,
+                    many_changes_threshold=many_changes_threshold,
+                ),
+            )
         )
 
     branch_result = _run_git(repo_path, ("rev-parse", "--abbrev-ref", "HEAD"))
@@ -345,39 +512,54 @@ def scan_repo(
     branch = branch_result.stdout.strip() or None
     head = head_result.stdout.strip() or None
     summary = parse_porcelain_status(status_result.stdout)
+    remote = _remote_sync_status(
+        repo_path,
+        remote_check=remote_check,
+        fetch=fetch,
+        fetch_timeout_seconds=fetch_timeout_seconds,
+    )
 
-    return RepoSnapshot(
-        name=repo.name,
-        path=str(repo_path),
-        exists=True,
-        is_git_repo=True,
-        branch=branch,
-        head=head,
-        dirty=summary.dirty,
-        counts=summary.counts,
-        notable_files=_notable_files(
-            summary,
-            max_files=max_files_per_repo,
-            include_untracked=include_untracked,
-        ),
-        risk_flags=classify_risk_flags(
+    return _finalize(
+        RepoSnapshot(
+            name=repo.name,
+            path=str(repo_path),
             exists=True,
             is_git_repo=True,
             branch=branch,
-            summary=summary,
-            many_changes_threshold=many_changes_threshold,
-        ),
+            head=head,
+            dirty=summary.dirty,
+            counts=summary.counts,
+            notable_files=_notable_files(
+                summary,
+                max_files=max_files_per_repo,
+                include_untracked=include_untracked,
+            ),
+            risk_flags=classify_risk_flags(
+                exists=True,
+                is_git_repo=True,
+                branch=branch,
+                summary=summary,
+                many_changes_threshold=many_changes_threshold,
+                remote=remote,
+                remote_check=remote_check,
+            ),
+            remote=remote,
+        )
     )
 
 
-def build_snapshot(config: RepoOpsConfig) -> Snapshot:
+def build_snapshot(config: RepoOpsConfig, *, cli_fetch: bool = False) -> Snapshot:
     """Scan all configured repositories and return a snapshot."""
+    effective_fetch = resolve_fetch(cli_fetch, config.defaults.fetch)
     repos = [
         scan_repo(
             repo,
             max_files_per_repo=config.defaults.max_files_per_repo,
             include_untracked=config.defaults.include_untracked,
             many_changes_threshold=config.defaults.many_changes_threshold,
+            remote_check=config.defaults.remote_check,
+            fetch=effective_fetch,
+            fetch_timeout_seconds=config.defaults.fetch_timeout_seconds,
         )
         for repo in config.repos
     ]

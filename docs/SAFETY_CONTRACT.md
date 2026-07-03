@@ -1,4 +1,4 @@
-# Safety contract — repoops v0
+# Safety contract — repoops v1
 
 ## Core rule
 
@@ -29,7 +29,30 @@ git rev-parse --is-inside-work-tree
 git rev-parse --abbrev-ref HEAD
 git rev-parse --short HEAD
 git status --porcelain=v1
+git rev-parse --abbrev-ref --symbolic-full-name @{u}
+git rev-list --count @{u}..HEAD
+git rev-list --count HEAD..@{u}
 ```
+
+All of the above are read-only and metadata-only — they inspect local refs and never touch the network or the working tree.
+
+## Command whitelist enforcement
+
+The Git commands above are enforced in code, not just by convention: `src/repoops/git_scan.py` holds an `ALLOWED_GIT_COMMANDS` set of exact argument tuples, and the internal `_run_git` helper raises `ValueError` if asked to run anything outside it. This is defense-in-depth — even a future bug that tried to run an unlisted command would be rejected before `subprocess` ever executes it. Any change to a git invocation (new flags, new order) requires a matching whitelist update; this is an intentional maintenance cost for a safety-critical tool.
+
+## Fetch (opt-in, metadata only)
+
+```text
+git fetch --prune
+```
+
+`git fetch --prune` is the **only** network-touching command in `repoops`, and it is treated differently from the read-only commands above:
+
+- **Opt-in only.** It runs only when `defaults.fetch: true` in config, or `--fetch` is passed on the CLI (see `docs/CLI_CONTRACT.md`). The default is `fetch: false` — no network access unless explicitly requested.
+- **Separately whitelisted.** It is validated against its own `ALLOWED_FETCH_COMMANDS` set and run through a dedicated `_run_fetch` helper, never through `_run_git`. This means broadening the read-only whitelist can never accidentally permit fetch.
+- **Updates remote-tracking refs only** (e.g. `origin/main`). It never modifies the working tree, never merges, and is never `git pull`.
+- **Bounded by `defaults.fetch_timeout_seconds`** (`subprocess` timeout) and runs with `GIT_TERMINAL_PROMPT=0` so a misconfigured remote can never hang on an interactive credential prompt in a headless cron context.
+- **Non-fatal on failure.** A failed or timed-out fetch is recorded as a sanitized `fetch_error` on that repo's snapshot (and the `fetch_failed` risk flag), never raised as an exception that would abort the rest of the scan.
 
 ## Secret handling
 
@@ -64,6 +87,10 @@ If a changed path is secret-like:
 config/prod.credentials.json -> config/[REDACTED_SECRET_PATH]
 secrets/api_token.txt -> [REDACTED_SECRET_PATH]/[REDACTED_SECRET_PATH]
 ```
+
+## Fetch error sanitization
+
+`git fetch` stderr can, in exotic remote configurations, contain a credential-embedded URL (e.g. `https://user:token@host/repo.git`). Raw stderr is never stored or rendered. Before becoming `fetch_error`, it is reduced by a pure `_sanitize_git_error` function: only the first line is kept, any `scheme://...` substring is replaced wholesale with `[REDACTED_URL]`, and the result is capped to 200 characters. This holds by construction, not because test fixtures happen to use local paths.
 
 ## Notification rule
 

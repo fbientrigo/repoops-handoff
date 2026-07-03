@@ -22,7 +22,6 @@ def test_load_minimal_config(tmp_path: Path) -> None:
         repos:
           - name: dihiggs
             path: ~/dihiggs
-            group: physics
         """,
     )
 
@@ -32,7 +31,6 @@ def test_load_minimal_config(tmp_path: Path) -> None:
     assert cfg.notifications.enabled is False
     assert cfg.notifications.channel == NotificationChannel.NONE
     assert cfg.repos[0].name == "dihiggs"
-    assert cfg.repos[0].group == "physics"
 
 
 def test_config_expands_user_paths(tmp_path: Path) -> None:
@@ -85,3 +83,41 @@ def test_config_accepts_notification_none(tmp_path: Path) -> None:
 
     assert cfg.notifications.enabled is True
     assert cfg.notifications.channel == NotificationChannel.NONE
+
+
+def test_defaults_remote_check_fetch_settings(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: nasapcdeb
+        repos: []
+        """,
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg.defaults.remote_check is True
+    assert cfg.defaults.fetch is False
+    assert cfg.defaults.fetch_timeout_seconds == 20
+
+
+def test_config_overrides_remote_and_fetch_settings(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: nasapcdeb
+        defaults:
+          remote_check: false
+          fetch: true
+          fetch_timeout_seconds: 5
+        repos: []
+        """,
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg.defaults.remote_check is False
+    assert cfg.defaults.fetch is True
+    assert cfg.defaults.fetch_timeout_seconds == 5

@@ -39,5 +39,6 @@ def notify_report(config: RepoOpsConfig, report_path: str | Path) -> NotifyResul
     # Do not read or print secret environment values here.
     # Backend implementations should resolve env var names internally and never expose values.
     raise NotImplementedError(
-        f"Notification channel '{notifications.channel.value}' is not implemented in the v0 skeleton."
+        f"Notification channel '{notifications.channel.value}' is not implemented "
+        "in the v0 skeleton."
     )

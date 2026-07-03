@@ -13,23 +13,31 @@ from repoops.report import print_summary_table, render_markdown
 app = typer.Typer(help="Low-noise multi-repository status reporter.")
 
 
+FETCH_OPTION_HELP = (
+    "Force a safe `git fetch --prune` before computing ahead/behind status. "
+    "Updates remote-tracking refs only — never the working tree, never pulls or pushes."
+)
+
+
 @app.command()
 def scan(
     config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    fetch: bool = typer.Option(False, "--fetch", help=FETCH_OPTION_HELP),
 ) -> None:
     """Scan configured repositories and print a terminal table."""
     cfg = load_config(config)
-    snapshot = build_snapshot(cfg)
+    snapshot = build_snapshot(cfg, cli_fetch=fetch)
     print_summary_table(snapshot)
 
 
 @app.command()
 def run(
     config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    fetch: bool = typer.Option(False, "--fetch", help=FETCH_OPTION_HELP),
 ) -> None:
     """Scan configured repositories and write JSON + Markdown artifacts."""
     cfg = load_config(config)
-    snapshot = build_snapshot(cfg)
+    snapshot = build_snapshot(cfg, cli_fetch=fetch)
     print_summary_table(snapshot)
 
     report_dir = ensure_dir(cfg.defaults.report_dir)

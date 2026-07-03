@@ -53,7 +53,9 @@ def test_notify_missing_report_fails_cleanly(tmp_path: Path) -> None:
         notify_report(cfg, tmp_path / "missing.md")
 
 
-def test_notify_does_not_log_secret_env_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_notify_does_not_log_secret_env_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     report = tmp_path / "report.md"
     report.write_text("# report\n", encoding="utf-8")
     monkeypatch.setenv("REPOOPS_TELEGRAM_BOT_TOKEN", "SECRET_TOKEN_VALUE")
