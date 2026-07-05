@@ -37,10 +37,10 @@ def send_message(*, bot_token: str, chat_id: str, text: str, timeout: float = 10
     except urllib.error.HTTPError as exc:
         raise TelegramError(f"Telegram API returned HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
+        # Covers connection failures and timeouts alike — urlopen wraps both
+        # (including socket timeouts) in URLError, never raises TimeoutError bare.
         reason = str(exc.reason)[:_ERROR_DETAIL_LIMIT]
         raise TelegramError(f"Telegram request failed: {reason}") from exc
-    except TimeoutError as exc:
-        raise TelegramError("Telegram request timed out") from exc
 
     if status != 200:
         raise TelegramError(f"Telegram API returned unexpected status {status}")

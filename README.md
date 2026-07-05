@@ -186,21 +186,28 @@ aws-climate
 
 ## Example Notification
 
+This is the actual message body sent to Telegram: the report's header, Summary, and Attention summary sections, verbatim, with the per-repo detail section dropped.
+
 ```text
-RepoOps v0 — nasapcdeb
+# repoops report
 
-Dirty repos: 2 / 4
+- Schema: `repoops.snapshot.v1`
+- Machine: `nasapcdeb`
+- Timestamp: `2026-06-25T09:00:00-04:00`
+- Repositories scanned: `4`
 
-1. dihiggs [main @ a1b2c3d]
-   M:3 U:2 S:0 D:0
-   Notable: src/model.py, tests/test_model.py
+## Summary
 
-2. aws-climate [main @ e4f5g6h]
-   M:1 U:0 S:1 D:0
-   Notable: lambda/handler.py
+- Dirty repos: `2`
+- Missing repos: `0`
+- Non-Git directories: `0`
 
-Report:
-~/.local/share/repoops/reports/latest.md
+## Attention summary
+
+| Repo | Score | Branch | HEAD | Ahead | Behind | Risk flags |
+| --- | --- | --- | --- | --- | --- | --- |
+| dihiggs | 40 | main | a1b2c3d | 2 | 0 | `dirty`, `ahead_remote` |
+| aws-climate | 30 | main | e4f5g6h | 0 | 0 | `dirty` |
 ```
 
 ## Telegram notifications
@@ -301,6 +308,17 @@ If either environment variable is missing, `repoops notify`/`repoops run` fail l
 
 By default `repoops` never touches the network — `defaults.fetch` is `false` and `--fetch` must be passed explicitly (or set in config) to permit `git fetch --prune`. Every other run is entirely local, read-only Git metadata inspection.
 
+If `notifications.channel: telegram` is enabled, `cron` does not source your shell profile, so `REPOOPS_TELEGRAM_BOT_TOKEN`/`REPOOPS_TELEGRAM_CHAT_ID` must be set where cron can see them — either as `crontab` environment lines, or in a wrapper script:
+
+```cron
+REPOOPS_TELEGRAM_BOT_TOKEN=123456:AA....
+REPOOPS_TELEGRAM_CHAT_ID=123456789
+
+*/15 * * * * /usr/bin/env repoops run --config /home/fabian/.config/repoops/repos.yaml
+```
+
+Keep the crontab file `chmod 600` (owner read/write only) since it now holds a credential-equivalent value.
+
 ## Windows (PowerShell / Task Scheduler)
 
 ```powershell
@@ -312,6 +330,8 @@ repoops run --config C:\Users\fabian\.config\repoops\repos.yaml --fetch
 ```
 
 Register either line as the action of a Windows Task Scheduler task (Trigger: e.g. "Daily, repeat every 15 minutes") instead of cron. `repoops` exits `0` on a completed scan and writes no output beyond the printed table and the JSON/Markdown artifacts, so it is safe to run non-interactively from a scheduled task.
+
+For Telegram notifications, set the two environment variables at the user level (`setx REPOOPS_TELEGRAM_BOT_TOKEN "123456:AA...."`, `setx REPOOPS_TELEGRAM_CHAT_ID "123456789"`) so Task Scheduler's non-interactive session inherits them; `setx` only takes effect in new sessions, so re-register the task (or reboot) after setting them.
 
 ## Safety Principles
 
@@ -350,7 +370,7 @@ Notification output must avoid leaking secrets. It should never include file con
 
 ### v0.2
 
-* Add Telegram notification.
+* Add Telegram notification. ✅
 * Add Slack webhook notification.
 * Add SMTP email notification.
 
