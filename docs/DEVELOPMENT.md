@@ -36,7 +36,7 @@ Recommended order:
 6. Markdown report;
 7. CLI scan/run;
 8. notification disabled/no-op;
-9. Telegram/Slack/SMTP backends.
+9. Telegram backend (done) / Slack / SMTP backends.
 
 ## 5. Manual smoke test
 

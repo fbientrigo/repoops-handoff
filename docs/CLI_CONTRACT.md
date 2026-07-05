@@ -56,3 +56,5 @@ Behavior:
 - sends or no-ops depending on config;
 - does not scan repositories;
 - does not generate new artifacts.
+
+`channel: telegram` sends a short synthesis of the report (see `docs/SAFETY_CONTRACT.md` → "Telegram backend"). It requires `REPOOPS_TELEGRAM_BOT_TOKEN` and `REPOOPS_TELEGRAM_CHAT_ID` in the environment; missing variables raise immediately, while a failed API call is reported as `skipped` rather than raised. `slack` and `email` remain `NotImplementedError` stubs.
