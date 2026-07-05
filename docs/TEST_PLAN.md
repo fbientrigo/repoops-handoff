@@ -71,3 +71,14 @@
 - `channel: none` is no-op.
 - Missing report path fails cleanly.
 - Secret environment variable values are never logged or returned.
+- `channel: telegram` with both env vars set sends a synthesis derived from the report and returns `sent`.
+- `channel: telegram` with a missing env var raises `ValueError` naming the missing variable.
+- A Telegram send failure is non-fatal: returns `skipped` with a sanitized reason, never raises.
+- Synthesis keeps header/Summary/Attention summary, drops the per-repo `## Repositories` section, and truncates to the configured limit.
+
+## Telegram transport tests
+
+- A successful call posts JSON `{chat_id, text, disable_web_page_preview}` to `https://api.telegram.org/bot<token>/sendMessage`.
+- An `HTTPError` raises `TelegramError` containing only the HTTP status code — never the bot token or URL.
+- A `URLError` raises `TelegramError` containing only the sanitized connection reason — never the bot token or URL.
+- A non-200 status without an exception still raises `TelegramError`.

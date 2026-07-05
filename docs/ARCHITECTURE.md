@@ -43,10 +43,15 @@ report
  └── git_scan data models
 
 notify
- └── config
+ ├── config
+ ├── paths
+ └── telegram
+
+telegram
+ (no repoops dependencies — stdlib urllib only)
 ```
 
-`config` and `paths` should remain low-level and have no dependency on Git, Rich, Typer, or HTTP clients.
+`config` and `paths` should remain low-level and have no dependency on Git, Rich, Typer, or HTTP clients. `telegram` is the one module allowed to depend on an HTTP client (stdlib `urllib`, deliberately no third-party dependency); it depends on nothing else in `repoops` and knows only "send this text to this chat with this token," so it's just as easy to swap for `httpx`/`requests` later or reuse from a future Slack/SMTP backend without pulling in `notify`'s config-handling concerns.
 
 ## Why no database in v0
 

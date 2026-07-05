@@ -110,6 +110,8 @@ defaults:
 notifications:
   enabled: false
   channel: none  # telegram | slack | email | none
+  # channel: telegram requires REPOOPS_TELEGRAM_BOT_TOKEN and
+  # REPOOPS_TELEGRAM_CHAT_ID in the environment — see "Telegram notifications" below.
 
 repos:
   - name: dihiggs
@@ -200,6 +202,23 @@ Dirty repos: 2 / 4
 Report:
 ~/.local/share/repoops/reports/latest.md
 ```
+
+## Telegram notifications
+
+`channel: telegram` sends a short synthesis (header + Summary + Attention summary — never the per-repo detail section) as a single Telegram message, so a phone push notification stays small even for many repos.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and note the bot token.
+2. Message the bot once (or add it to a group) and find your numeric chat ID, e.g. via `https://api.telegram.org/bot<token>/getUpdates`.
+3. Export both values in the environment `repoops` runs under — never in the YAML config:
+
+```bash
+export REPOOPS_TELEGRAM_BOT_TOKEN="123456:AA...."
+export REPOOPS_TELEGRAM_CHAT_ID="123456789"
+```
+
+4. Set `notifications.enabled: true` and `notifications.channel: telegram` in config, then run `repoops run --config ...` (or `repoops notify --config ... --report <path>` against an existing report).
+
+If either environment variable is missing, `repoops notify`/`repoops run` fail loudly with a clear error naming the missing variable (never its value) so a misconfigured cron job or systemd timer surfaces immediately. A failed Telegram API call (bad token, network unreachable) is non-fatal — it's reported as `skipped` with a sanitized reason, the same way a failed `git fetch` is non-fatal to the rest of a scan.
 
 ## Snapshot Schema
 

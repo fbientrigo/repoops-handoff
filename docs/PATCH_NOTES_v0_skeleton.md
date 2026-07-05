@@ -19,7 +19,7 @@ This skeleton establishes the v0 contract and a small implementation base.
 
 ## Intentionally deferred
 
-- Telegram delivery.
+- ~~Telegram delivery.~~ Implemented: `repoops.telegram` (stdlib `urllib` transport) + `notify.py` telegram branch, sending a short synthesis of the Markdown report. See `docs/SAFETY_CONTRACT.md` → "Telegram backend".
 - Slack webhook delivery.
 - SMTP delivery.
 - Agent handoff generation.
@@ -29,4 +29,4 @@ This skeleton establishes the v0 contract and a small implementation base.
 
 ## Next implementation target
 
-Add actual Telegram/Slack/SMTP backends behind the existing `notify_report` boundary, keeping disabled/no-op behavior as the default safe mode.
+Add Slack webhook and SMTP backends behind the existing `notify_report` boundary, following the same pattern as Telegram: a dependency-free transport module, env-var-only credentials, non-fatal send failures, and a synthesized (not full-report) message body.
