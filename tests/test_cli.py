@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -63,3 +65,45 @@ def test_scan_command_accepts_fetch_flag(tmp_path: Path, clean_git_repo: Path) -
     result = runner.invoke(app, ["scan", "--config", str(config_path), "--fetch"])
 
     assert result.exit_code == 0, result.output
+
+
+def test_worklog_scan_records_a_row_and_export_writes_csv(
+    tmp_path: Path, clean_git_repo: Path
+) -> None:
+    worklog_db = tmp_path / "worklog.db"
+    report_dir = tmp_path / "reports"
+    config_path = tmp_path / "repos.yaml"
+    config_path.write_text(
+        f"""
+        machine:
+          name: nasapcdeb
+        defaults:
+          worklog_db: {worklog_db}
+          report_dir: {report_dir}
+          remote_check: false
+        repos:
+          - name: repo
+            path: {clean_git_repo}
+            project: Apolo
+        """,
+        encoding="utf-8",
+    )
+
+    scan_result = runner.invoke(app, ["worklog-scan", "--config", str(config_path)])
+    assert scan_result.exit_code == 0, scan_result.output
+    assert worklog_db.exists()
+
+    conn = sqlite3.connect(worklog_db)
+    row_count = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+    conn.close()
+    assert row_count == 1
+
+    month = datetime.now().strftime("%Y-%m")
+    export_result = runner.invoke(
+        app, ["worklog-export", "--config", str(config_path), "--month", month]
+    )
+    assert export_result.exit_code == 0, export_result.output
+
+    csv_path = report_dir / f"repoops-worklog-{month}.csv"
+    assert csv_path.exists()
+    assert csv_path.read_text(encoding="utf-8").startswith("date,project,repos_touched")

@@ -103,6 +103,7 @@ defaults:
   include_clean_repos: false
   report_dir: ~/.local/share/repoops/reports
   snapshot_dir: ~/.local/share/repoops/snapshots
+  worklog_db: ~/.local/share/repoops/worklog.db  # see "Worklog evidence" below
   remote_check: true      # compute upstream/ahead/behind from local refs
   fetch: false             # true permits `git fetch --prune` before computing ahead/behind
   fetch_timeout_seconds: 20
@@ -116,12 +117,14 @@ notifications:
 repos:
   - name: dihiggs
     path: ~/dihiggs
+    project: DiHiggs   # optional; groups repos for worklog evidence
 
   - name: aws-climate
     path: ~/aws
 
   - name: apolo-rag
     path: ~/apolo_rag
+    project: Apolo
 
   - name: vectorjobs
     path: ~/vectorjobs
@@ -135,6 +138,9 @@ repoops scan --config examples/repos.yaml --fetch
 repoops run --config examples/repos.yaml
 repoops run --config examples/repos.yaml --fetch
 repoops notify --config examples/repos.yaml --report ~/.local/share/repoops/reports/latest.md
+repoops worklog-scan --config examples/repos.yaml
+repoops worklog-weekly --config examples/repos.yaml --week 2026-W28
+repoops worklog-export --config examples/repos.yaml --month 2026-07 --format csv
 ```
 
 ### `repoops scan`
@@ -153,6 +159,10 @@ Runs the full workflow:
 ### `repoops notify`
 
 Sends an already-generated report through the configured notification backend.
+
+### `repoops worklog-scan` / `worklog-weekly` / `worklog-export`
+
+Record and summarize worklog evidence from repeated scans. See "Worklog evidence" below for what these can and cannot prove.
 
 ### `--fetch`
 
@@ -332,6 +342,55 @@ repoops run --config C:\Users\fabian\.config\repoops\repos.yaml --fetch
 Register either line as the action of a Windows Task Scheduler task (Trigger: e.g. "Daily, repeat every 15 minutes") instead of cron. `repoops` exits `0` on a completed scan and writes no output beyond the printed table and the JSON/Markdown artifacts, so it is safe to run non-interactively from a scheduled task.
 
 For Telegram notifications, set the two environment variables at the user level (`setx REPOOPS_TELEGRAM_BOT_TOKEN "123456:AA...."`, `setx REPOOPS_TELEGRAM_CHAT_ID "123456789"`) so Task Scheduler's non-interactive session inherits them; `setx` only takes effect in new sessions, so re-register the task (or reboot) after setting them.
+
+## Worklog evidence
+
+`repoops` can turn repeated local scan snapshots into low-confidence **worklog evidence** — never a final report, never exact hours. This is an M0: minimal, local, read-only, and every output row is a candidate for you to review, not a conclusion.
+
+### What it can prove
+
+- That a repo had uncommitted local changes at a given scan time.
+- That a project (repos grouped by `repos[].project` in config, e.g. `Apolo`, `ChargeMonitoringSystem`, `DiHiggs`) had **repeated** dirty-worktree activity on a given day — weak but real evidence that someone was working on it that day.
+
+### What it cannot prove
+
+- Exact hours worked. `repoops` never outputs a precise duration — only a wide `real_hours_estimate_range` and a `suggested_reportable_hours` value capped at 4 hours/day.
+- That changes are complete, correct, reviewed, or even related to billable work.
+- Time spent away from a dirty worktree — planning, meetings, review, and reading-only days never create a candidate, since a clean scan is not evidence.
+- *What* changed. File contents and diffs are never read or stored; only redacted paths, counts, and risk flags.
+
+### How estimation works (conservative, by design)
+
+- One isolated dirty snapshot on a day → `confidence: low`.
+- Repeated dirty snapshots on the same day/project push confidence to `medium`/`high` and raise `suggested_reportable_hours`, but it never exceeds 4 hours/day, no matter how many snapshots were taken.
+- If the same repo shows the same redacted diff, dirty, across 3+ different days in a trailing week, the candidate is flagged `needs_review: true` — that pattern is as consistent with a stale uncommitted change as with real multi-day work, so it's left for you to judge.
+
+### Scheduling scans
+
+Schedule `repoops worklog-scan` the same way as `repoops run` (see "Cron Example" / "Windows" above), ideally more frequently during working hours so there's enough repeated-activity signal to estimate from:
+
+```cron
+# Every 30 minutes, working hours, weekdays only.
+*/30 9-19 * * 1-5 /usr/bin/env repoops worklog-scan --config /home/fabian/.config/repoops/repos.yaml
+```
+
+```powershell
+repoops worklog-scan --config C:\Users\fabian\.config\repoops\repos.yaml
+```
+
+It never runs `git fetch` and only reuses the same read-only scan `repoops run` already performs — see `docs/SAFETY_CONTRACT.md`.
+
+### Feeding the weekly pack to Claude Tasks
+
+`repoops worklog-weekly --week 2026-W28` prints candidate rows to the terminal; `repoops worklog-export --month 2026-07 --format csv` writes them to a CSV under `defaults.report_dir`. Paste that CSV (or the printed table) into a Claude Tasks prompt alongside your own memory of the week and ask it to draft a timesheet **for your review**, e.g.:
+
+> Here's my repoops worklog CSV for the week of 2026-07-06. Cross-reference it with what I remember doing and draft a timesheet entry per day. Flag anything `needs_review` for me to double-check before I submit it.
+
+`repoops` only produces the raw evidence rows — it never talks to Claude Tasks (or any other system) itself, and it never generates a monthly report of its own (that's explicitly out of scope for M0).
+
+### Human approval required
+
+**No `suggested_reportable_hours` value is ever a final answer.** Every worklog row is a candidate that a human must confirm, adjust, or reject before it goes into any invoice, timesheet, or payroll system.
 
 ## Safety Principles
 

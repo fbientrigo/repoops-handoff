@@ -8,7 +8,15 @@ from repoops.config import load_config
 from repoops.git_scan import build_snapshot
 from repoops.notify import notify_report
 from repoops.paths import ensure_dir
-from repoops.report import print_summary_table, render_markdown
+from repoops.report import print_summary_table, print_worklog_candidates, render_markdown
+from repoops.worklog import (
+    compute_candidates,
+    iso_week_range,
+    month_range,
+    open_store,
+    record_snapshot,
+    write_candidates_csv,
+)
 
 app = typer.Typer(help="Low-noise multi-repository status reporter.")
 
@@ -70,6 +78,55 @@ def notify_cmd(
     cfg = load_config(config)
     result = notify_report(cfg, report)
     typer.echo(f"Notification: {result.status} ({result.reason or result.channel})")
+
+
+@app.command(name="worklog-scan")
+def worklog_scan(
+    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+) -> None:
+    """Scan configured repositories (read-only) and record a worklog evidence snapshot."""
+    cfg = load_config(config)
+    snapshot = build_snapshot(cfg)
+    conn = open_store(cfg.defaults.worklog_db)
+    rows = record_snapshot(conn, cfg, snapshot)
+    conn.close()
+    typer.echo(f"Worklog snapshot recorded: {rows} repo row(s) -> {cfg.defaults.worklog_db}")
+
+
+@app.command(name="worklog-weekly")
+def worklog_weekly(
+    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    week: str = typer.Option(..., "--week", help="ISO week, e.g. 2026-W28."),
+) -> None:
+    """Print worklog candidate rows for a week. These are evidence, not approved hours."""
+    cfg = load_config(config)
+    start, end = iso_week_range(week)
+    conn = open_store(cfg.defaults.worklog_db)
+    candidates = compute_candidates(conn, start, end)
+    conn.close()
+    print_worklog_candidates(candidates)
+
+
+@app.command(name="worklog-export")
+def worklog_export(
+    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    month: str = typer.Option(..., "--month", help="Month, e.g. 2026-06."),
+    export_format: str = typer.Option("csv", "--format", help="Only 'csv' is supported."),
+) -> None:
+    """Export worklog candidate rows for a month as CSV. Not a final payroll report."""
+    if export_format != "csv":
+        raise typer.BadParameter("Only --format csv is supported.")
+
+    cfg = load_config(config)
+    start, end = month_range(month)
+    conn = open_store(cfg.defaults.worklog_db)
+    candidates = compute_candidates(conn, start, end)
+    conn.close()
+
+    report_dir = ensure_dir(cfg.defaults.report_dir)
+    out_path = report_dir / f"repoops-worklog-{month}.csv"
+    write_candidates_csv(candidates, out_path)
+    typer.echo(f"Worklog export: {out_path}")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 ## Changelog
 
 - **v1**: added `remote` (`RemoteSyncStatus`) and `attention_score` to the repo snapshot; added 5 remote-related risk flags. `schema_version` bumped from `repoops.snapshot.v0` to `repoops.snapshot.v1`.
+- **M0 worklog**: added a local SQLite evidence store (`repoops.worklog`) and derived candidate rows. This is additive — it does not change the JSON snapshot schema above.
 
 ## Snapshot schema
 
@@ -142,3 +143,55 @@ Rules:
 3. Secret-like paths must be redacted.
 4. File contents are never read.
 5. `include_untracked` affects notable file listing, not raw counts.
+
+## Worklog evidence store
+
+`repoops.worklog` persists scan results to a local SQLite database at `defaults.worklog_db` (see `examples/repos.yaml`). Its purpose is narrow: turn repeated `repoops worklog-scan` runs into low-confidence evidence that a human can review before entering hours anywhere — it is not a timesheet, invoice, or payroll generator (see `docs/SAFETY_CONTRACT.md`).
+
+### `snapshots` table (rows written by `repoops worklog-scan`)
+
+One row per existing, in-git-repo entry in a scan, unconditionally (dirty or clean):
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | integer | Autoincrement primary key. |
+| `observed_at` | text | Snapshot timestamp, same ISO-8601 string as the JSON snapshot's `timestamp`. |
+| `machine` | text | From config `machine.name`. |
+| `project` | text | `repos[].project` from config, or `unassigned` if not set. |
+| `repo` | text | Repo name from config. |
+| `path` | text | Expanded absolute repo path. |
+| `branch` | text/null | Current branch or `HEAD` when detached. |
+| `head` | text/null | Short commit hash. |
+| `dirty` | integer (0/1) | Whether porcelain status had entries. |
+| `staged_count`, `modified_count`, `untracked_count`, `deleted_count`, `renamed_count`, `conflicted_count` | integer | Same counts as the JSON snapshot's `counts`. |
+| `ahead`, `behind` | integer/null | Same as the JSON snapshot's `remote.ahead`/`remote.behind`. |
+| `risk_flags` | text | JSON-encoded array, same allowed values as the JSON snapshot's `risk_flags`. |
+| `changed_paths_redacted` | text | JSON-encoded array of already-redacted `notable_files` paths — never raw file contents or full diffs. |
+| `changed_paths_hash` | text | SHA-256 of the sorted, joined redacted path list. Used to detect a repo showing the *same* redacted diff across multiple days; never derived from file contents. |
+
+### Candidate rows (computed on demand by `worklog-weekly` / `worklog-export`, never stored)
+
+`compute_candidates` groups `dirty = 1` snapshot rows by `(day, project)` within a requested date range and derives one `WorklogCandidate` per group:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `date` | string | `YYYY-MM-DD`. |
+| `project` | string | Matches the `snapshots.project` column. |
+| `repos_touched` | array[string] | Sorted, deduplicated repo names dirty that day for that project. |
+| `evidence_summary` | string | Human-readable count of snapshots/repos and any risk flags seen. |
+| `real_hours_estimate_range` | string | Wide, conservative range (e.g. `"1-3"`), never a single precise value. |
+| `suggested_reportable_hours` | float | Capped at `MAX_DAILY_HOURS` (4.0), regardless of snapshot count. |
+| `confidence` | string | `low` (1 snapshot), `medium` (2–3), or `high` (4+) — a function of snapshot count only. |
+| `needs_review` | bool | `true` if any repo in the group shows the same `changed_paths_hash` dirty on 3+ distinct days in the queried window (`STALE_STREAK_DAYS`). |
+
+**Candidate rows are evidence only — never approved hours.** No candidate is written back to the SQLite store; `worklog-weekly` prints them and `worklog-export` writes them to CSV, but neither mutates `snapshots`.
+
+### CSV export columns (`repoops worklog-export --format csv`)
+
+Written to `defaults.report_dir/repoops-worklog-<month>.csv`, one row per candidate, in this column order:
+
+```text
+date,project,repos_touched,evidence_summary,real_hours_estimate_range,suggested_reportable_hours,confidence,needs_review
+```
+
+`repos_touched` is semicolon-joined (`"; "`) since it can contain multiple repo names.

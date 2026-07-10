@@ -4,6 +4,7 @@ from rich.console import Console
 from rich.table import Table
 
 from repoops.git_scan import RepoSnapshot, Snapshot
+from repoops.worklog import WorklogCandidate
 
 
 def _repo_should_render(repo: RepoSnapshot, *, include_clean_repos: bool) -> bool:
@@ -158,6 +159,40 @@ def print_summary_table(snapshot: Snapshot, *, console: Console | None = None) -
             _optional_int(repo.remote.ahead),
             _optional_int(repo.remote.behind),
             str(repo.attention_score),
+        )
+
+    console.print(table)
+
+
+def print_worklog_candidates(
+    candidates: list[WorklogCandidate], *, console: Console | None = None
+) -> None:
+    """Print worklog candidate rows. These are evidence for review, not approved hours."""
+    console = console or Console()
+    if not candidates:
+        console.print("No worklog candidates in this range.")
+        return
+
+    table = Table(title="repoops worklog candidates (evidence only — not approved hours)")
+    table.add_column("Date")
+    table.add_column("Project")
+    table.add_column("Repos touched")
+    table.add_column("Evidence")
+    table.add_column("Est. range (h)")
+    table.add_column("Suggested (h)")
+    table.add_column("Confidence")
+    table.add_column("Needs review")
+
+    for candidate in candidates:
+        table.add_row(
+            candidate.date,
+            candidate.project,
+            ", ".join(candidate.repos_touched),
+            candidate.evidence_summary,
+            candidate.real_hours_estimate_range,
+            f"{candidate.suggested_reportable_hours:g}",
+            candidate.confidence,
+            "yes" if candidate.needs_review else "no",
         )
 
     console.print(table)

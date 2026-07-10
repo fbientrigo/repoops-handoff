@@ -102,6 +102,46 @@ def test_defaults_remote_check_fetch_settings(tmp_path: Path) -> None:
     assert cfg.defaults.fetch_timeout_seconds == 20
 
 
+def test_worklog_db_defaults_and_repo_project_is_optional(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: nasapcdeb
+        repos:
+          - name: dihiggs
+            path: ~/dihiggs
+        """,
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg.defaults.worklog_db.name == "worklog.db"
+    assert cfg.repos[0].project is None
+
+
+def test_config_overrides_worklog_db_and_repo_project(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: nasapcdeb
+        defaults:
+          worklog_db: ~/custom/worklog.db
+        repos:
+          - name: apolo-rag
+            path: ~/apolo_rag
+            project: Apolo
+        """,
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg.defaults.worklog_db.name == "worklog.db"
+    assert "custom" in str(cfg.defaults.worklog_db)
+    assert cfg.repos[0].project == "Apolo"
+
+
 def test_config_overrides_remote_and_fetch_settings(tmp_path: Path) -> None:
     config_path = write_config(
         tmp_path / "repos.yaml",

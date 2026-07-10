@@ -29,12 +29,13 @@ class DefaultsConfig(BaseModel):
     include_clean_repos: bool = False
     report_dir: Path = Path("~/.local/share/repoops/reports")
     snapshot_dir: Path = Path("~/.local/share/repoops/snapshots")
+    worklog_db: Path = Path("~/.local/share/repoops/worklog.db")
     many_changes_threshold: int = Field(default=20, ge=1)
     remote_check: bool = True
     fetch: bool = False
     fetch_timeout_seconds: int = Field(default=20, ge=1)
 
-    @field_validator("report_dir", "snapshot_dir", mode="before")
+    @field_validator("report_dir", "snapshot_dir", "worklog_db", mode="before")
     @classmethod
     def _expand_output_path(cls, value: str | Path) -> Path:
         return expand_path(value)
@@ -48,6 +49,7 @@ class NotificationConfig(BaseModel):
 class RepoConfig(BaseModel):
     name: str = Field(min_length=1)
     path: Path
+    project: str | None = None
 
     @field_validator("path", mode="before")
     @classmethod
