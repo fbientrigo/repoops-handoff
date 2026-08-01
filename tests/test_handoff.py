@@ -387,6 +387,91 @@ def test_scan_command_still_works_unaffected_by_handoff(
     assert result.exit_code == 0, result.output
 
 
+# --- Markdown contract: JSON is canonical, Markdown is generated ----------------
+
+
+def test_markdown_states_json_is_canonical_and_not_hand_editable(clean_git_repo: Path) -> None:
+    create_checkpoint(clean_git_repo)
+    _, md_path = handoff_paths(clean_git_repo)
+    content = md_path.read_text(encoding="utf-8")
+
+    # The notice must be prominent near the top, not just mentioned somewhere.
+    header_and_notice = content.split("## Repository", 1)[0]
+    assert "handoff.json" in header_and_notice
+    assert "canonical" in header_and_notice.lower() or "generated" in header_and_notice.lower()
+    assert "not" in header_and_notice.lower()
+    assert "repoops resume" in header_and_notice or "`repoops resume`" in header_and_notice
+
+
+def test_markdown_renders_full_semantic_content_not_just_counts(clean_git_repo: Path) -> None:
+    create_checkpoint(clean_git_repo)
+    json_path, md_path = handoff_paths(clean_git_repo)
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    data["semantic"] = {
+        "goal": "Full goal text should appear verbatim.",
+        "current_scope": "Full scope text should appear verbatim.",
+        "out_of_scope": ["Skip networking work"],
+        "completed": ["Wrote the parser"],
+        "decisions": [
+            {"decision": "Use JSON as canonical source", "rationale": "single source of truth"}
+        ],
+        "failed_attempts": [
+            {"attempt": "Parsed Markdown back into JSON", "why_failed": "lossy and fragile"}
+        ],
+        "verification_passed": [{"check": "ruff check .", "result": "0 errors"}],
+        "verification_pending": [{"check": "pytest -q", "result": "not yet run"}],
+    }
+    json_path.write_text(json.dumps(data), encoding="utf-8")
+
+    create_checkpoint(clean_git_repo)
+    content = md_path.read_text(encoding="utf-8")
+
+    assert "Full goal text should appear verbatim." in content
+    assert "Full scope text should appear verbatim." in content
+    assert "Skip networking work" in content
+    assert "Wrote the parser" in content
+    assert "Use JSON as canonical source" in content
+    assert "single source of truth" in content
+    assert "Parsed Markdown back into JSON" in content
+    assert "lossy and fragile" in content
+    assert "ruff check ." in content
+    assert "0 errors" in content
+    assert "pytest -q" in content
+    assert "not yet run" in content
+
+    # Must not be reduced to bare counts.
+    assert "Decisions: 1" not in content
+    assert "Failed attempts: 1" not in content
+    assert "Verification passed: 1" not in content
+    assert "Verification pending: 1" not in content
+
+
+# --- resume content: full semantic detail, not just goal/completed-count --------
+
+
+def test_resume_output_includes_decisions_and_failed_attempts(clean_git_repo: Path) -> None:
+    create_checkpoint(clean_git_repo)
+    json_path, _ = handoff_paths(clean_git_repo)
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    data["semantic"]["decisions"] = [{"decision": "Adopt normalized remote identity"}]
+    data["semantic"]["failed_attempts"] = [{"attempt": "Trusted raw remote URL equality"}]
+    data["semantic"]["verification_passed"] = [
+        {"check": "unit tests for normalize_remote_identity"}
+    ]
+    data["semantic"]["verification_pending"] = [{"check": "installed wheel smoke test"}]
+    data["next_action"]["success_condition"] = "resume exit code is 0 with WARNING only"
+    json_path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = runner.invoke(app, ["resume", str(clean_git_repo)])
+
+    assert result.exit_code == 0, result.output
+    assert "Adopt normalized remote identity" in result.output
+    assert "Trusted raw remote URL equality" in result.output
+    assert "unit tests for normalize_remote_identity" in result.output
+    assert "installed wheel smoke test" in result.output
+    assert "resume exit code is 0 with WARNING only" in result.output
+
+
 def test_worklog_and_handoff_do_not_interfere(tmp_path: Path, clean_git_repo: Path) -> None:
     worklog_db = tmp_path / "worklog.db"
     config_path = tmp_path / "repos.yaml"

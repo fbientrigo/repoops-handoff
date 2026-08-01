@@ -12,8 +12,10 @@ path-redaction machinery as `repoops.git_scan`.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -22,6 +24,7 @@ from repoops.git_scan import (
     _notable_files,
     _remote_sync_status,
     _run_git,
+    get_remote_origin_url,
     parse_porcelain_status,
     redact_secret_like_path,
 )
@@ -61,6 +64,54 @@ _RECENT_LOG_ARGS: tuple[str, ...] = (
 
 class HandoffError(RuntimeError):
     """Raised when a checkpoint/resume operation cannot proceed (e.g. not a Git repo)."""
+
+
+# scp-like syntax (`[user@]host:path`), as opposed to a URL with an explicit `scheme://`.
+_SCP_LIKE_REMOTE = re.compile(r"^(?:[^@/]+@)?(?P<host>[^:/]+):(?P<path>.+)$")
+
+
+def normalize_remote_identity(remote_url: str | None) -> str | None:
+    """Normalize a Git remote URL into a stable, comparable repository identity.
+
+    Handles common SSH (`git@host:owner/repo.git`, `ssh://git@host/owner/repo.git`) and
+    HTTPS (`https://host/owner/repo.git`) forms so equivalent remotes normalize to the
+    same identity (conceptually `host/owner/repo`), independent of scheme, `.git` suffix,
+    or trailing slash.
+
+    Never returns credentials, tokens, query strings, or the raw URL: usernames,
+    passwords, and query/fragment components are dropped, never inspected for content.
+    Returns None when the URL is empty or cannot be parsed into a host + path (e.g. a
+    local filesystem path) -- in that case there is no stable identity to compare.
+    """
+    if not remote_url:
+        return None
+    candidate = remote_url.strip()
+    if not candidate:
+        return None
+
+    host = ""
+    path = ""
+    if "://" in candidate:
+        parsed = urlsplit(candidate)
+        if not parsed.scheme:
+            return None
+        host = parsed.hostname or ""
+        path = parsed.path
+    else:
+        scp_match = _SCP_LIKE_REMOTE.match(candidate)
+        if not scp_match:
+            return None
+        host = scp_match.group("host")
+        path = scp_match.group("path")
+
+    host = host.strip().lower()
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+
+    if not host or not path:
+        return None
+    return f"{host}/{path}"
 
 
 def discover_repo_root(path: str | Path) -> Path:
@@ -180,6 +231,8 @@ def collect_repository_facts(root: Path) -> tuple[RepositoryInfo, ChangesInfo, l
 
     recent_commits = _parse_recent_commits(_run_git(root, _RECENT_LOG_ARGS).stdout)
 
+    remote_identity = normalize_remote_identity(get_remote_origin_url(root))
+
     repository = RepositoryInfo(
         name=root.name,
         root=str(root),
@@ -191,6 +244,7 @@ def collect_repository_facts(root: Path) -> tuple[RepositoryInfo, ChangesInfo, l
         ahead=remote.ahead,
         behind=remote.behind,
         dirty=summary.dirty,
+        remote_identity=remote_identity,
     )
     changes = ChangesInfo(
         counts=summary.counts,
@@ -201,16 +255,83 @@ def collect_repository_facts(root: Path) -> tuple[RepositoryInfo, ChangesInfo, l
     return repository, changes, recent_commits
 
 
-def create_checkpoint(path: str | Path) -> Handoff:
+def _placeholder_semantic() -> SemanticSection:
+    return SemanticSection(
+        goal="TODO: describe the current goal",
+        current_scope="TODO: describe what is in scope for this session",
+    )
+
+
+def _placeholder_next_action() -> NextAction:
+    return NextAction(
+        task="TODO: define the single next concrete task",
+        success_condition="TODO: define one concrete, checkable success condition",
+    )
+
+
+def _load_existing_for_checkpoint(json_path: Path) -> Handoff | None:
+    """Load a prior checkpoint before overwriting it. Returns None if none exists yet.
+
+    Raises `HandoffError` -- leaving `json_path` and its Markdown sibling untouched --
+    if a file exists there but is unsafe to preserve from (invalid JSON, an unsupported
+    or malformed schema). The caller is responsible for deciding whether the loaded
+    handoff belongs to the current repository.
+    """
+    if not json_path.exists():
+        return None
+    recorded, error = _load_recorded_handoff(json_path)
+    if error is not None:
+        raise HandoffError(
+            f"Existing {json_path} could not be safely preserved: {error.message} "
+            "Refusing to overwrite it with placeholders and leaving it unchanged. "
+            "Re-run with `--reset-semantic` to intentionally discard it, or fix the "
+            "file by hand."
+        )
+    assert recorded is not None
+    return recorded
+
+
+def create_checkpoint(path: str | Path, *, reset_semantic: bool = False) -> Handoff:
     """Collect current repo state and write `.repoops/handoff.json` + `HANDOFF.md`.
 
-    The semantic section (goal, scope, decisions, ...) is never inferred — every
-    checkpoint starts with explicit `TODO:` placeholders for a human or agent to
-    fill in. This is the only function in `repoops.handoff` that writes files, and
-    it writes exactly these two, atomically.
+    By default, semantic content (goal, scope, decisions, ...) and the next action
+    from a prior checkpoint at the same location are preserved across repeated runs,
+    as long as the prior checkpoint can be identified as belonging to this repository
+    (see `_compute_repository_identity_drift`). Only deterministic Git facts (branch,
+    HEAD, worktree, remote, diff stats, recent commits, timestamp) are refreshed.
+
+    If no prior checkpoint exists, semantic/next-action start as explicit `TODO:`
+    placeholders -- never inferred. If `reset_semantic` is True, prior semantic content
+    is discarded unconditionally and replaced with those same placeholders, regardless
+    of whether a prior checkpoint existed or was valid.
+
+    If a prior checkpoint exists but is unsafe to preserve from (invalid JSON,
+    unsupported schema, or clearly belonging to another repository) and `reset_semantic`
+    is False, this raises `HandoffError` and leaves both existing files unchanged.
+
+    This is the only function in `repoops.handoff` that writes files, and it writes
+    exactly these two, atomically.
     """
     root = discover_repo_root(path)
     repository, changes, recent_commits = collect_repository_facts(root)
+    json_path, md_path = handoff_paths(root)
+
+    semantic = _placeholder_semantic()
+    next_action = _placeholder_next_action()
+
+    if not reset_semantic:
+        existing = _load_existing_for_checkpoint(json_path)
+        if existing is not None:
+            conflict = _repository_identity_conflict(existing.repository, repository)
+            if conflict is not None:
+                raise HandoffError(
+                    f"Existing {json_path} appears to belong to a different repository: "
+                    f"{conflict.message} Refusing to preserve its semantic content or "
+                    "overwrite it, and leaving it unchanged. Re-run with "
+                    "`--reset-semantic` to intentionally discard it."
+                )
+            semantic = existing.semantic
+            next_action = existing.next_action
 
     handoff = Handoff(
         schema_version=HANDOFF_SCHEMA_VERSION,
@@ -218,17 +339,10 @@ def create_checkpoint(path: str | Path) -> Handoff:
         repository=repository,
         changes=changes,
         recent_commits=recent_commits,
-        semantic=SemanticSection(
-            goal="TODO: describe the current goal",
-            current_scope="TODO: describe what is in scope for this session",
-        ),
-        next_action=NextAction(
-            task="TODO: define the single next concrete task",
-            success_condition="TODO: define one concrete, checkable success condition",
-        ),
+        semantic=semantic,
+        next_action=next_action,
     )
 
-    json_path, md_path = handoff_paths(root)
     ensure_dir(json_path.parent)
     atomic_write_text(json_path, handoff.model_dump_json(indent=2) + "\n")
     atomic_write_text(md_path, render_handoff_markdown(handoff))
@@ -289,22 +403,114 @@ def _counts_diff_message(old: ChangeCounts, new: ChangeCounts) -> str:
     return ", ".join(parts)
 
 
+def _compute_repository_identity_drift(
+    old_repo: RepositoryInfo, current_repo: RepositoryInfo
+) -> list[DriftItem]:
+    """Compare recorded vs. current repository root + normalized remote identity.
+
+    This is the only P0 support for relocating a repository to a new absolute path
+    (a different clone, machine, or container) -- not multi-machine synchronization.
+    Severity rules:
+
+    - Same root: no relocation drift. If the remote identity nonetheless changed,
+      that is reported separately (WARNING, or BLOCKING if both recorded values are
+      non-empty and clearly different).
+    - Different root, same non-empty normalized identity: WARNING
+      (`repository_relocated`) -- a legitimate relocation, not blocking by itself.
+    - Different root, different non-empty identities: BLOCKING -- likely another
+      repository.
+    - Different root, identity unavailable on either side: BLOCKING -- there is no
+      stable evidence the two directories are the same repository.
+    """
+    old_root, new_root = old_repo.root, current_repo.root
+    old_id, new_id = old_repo.remote_identity, current_repo.remote_identity
+
+    if old_root == new_root:
+        if old_id == new_id:
+            return []
+        both_known = bool(old_id) and bool(new_id)
+        return [
+            DriftItem(
+                field="remote_identity",
+                severity=Severity.BLOCKING if both_known else Severity.WARNING,
+                message=(
+                    "The configured Git remote changed at the same repository root, and "
+                    "points to a different repository."
+                    if both_known
+                    else "The configured Git remote changed at the same repository root."
+                ),
+                old=old_id or "(none)",
+                new=new_id or "(none)",
+            )
+        ]
+
+    if old_id and new_id and old_id == new_id:
+        return [
+            DriftItem(
+                field="repository_relocated",
+                severity=Severity.WARNING,
+                message=(
+                    "The absolute repository path changed, but the normalized Git remote "
+                    f"identity ({old_id}) still matches -- this looks like a legitimate "
+                    "relocation (a different clone, machine, or container), not a "
+                    "different repository."
+                ),
+                old=old_root,
+                new=new_root,
+            )
+        ]
+
+    if old_id and new_id:
+        return [
+            DriftItem(
+                field="repository_root",
+                severity=Severity.BLOCKING,
+                message=(
+                    "The repository root changed and the normalized Git remote identity "
+                    f"does not match ({old_id!r} vs {new_id!r}) -- this checkpoint likely "
+                    "belongs to another repository."
+                ),
+                old=old_root,
+                new=new_root,
+            )
+        ]
+
+    return [
+        DriftItem(
+            field="repository_root",
+            severity=Severity.BLOCKING,
+            message=(
+                "The repository root changed and no stable Git remote identity is "
+                "available on one or both sides. RepoOps cannot safely prove that both "
+                "directories represent the same repository."
+            ),
+            old=old_root,
+            new=new_root,
+        )
+    ]
+
+
+def _repository_identity_conflict(
+    old_repo: RepositoryInfo, current_repo: RepositoryInfo
+) -> DriftItem | None:
+    """Whether `old_repo` can safely be identified as the same repository as `current_repo`.
+
+    Returns the first BLOCKING drift item if not, else None. Used by `create_checkpoint`
+    to decide whether preserving semantic content from a prior checkpoint is safe.
+    """
+    for item in _compute_repository_identity_drift(old_repo, current_repo):
+        if item.severity == Severity.BLOCKING:
+            return item
+    return None
+
+
 def _compute_drift(
     recorded: Handoff, current_repository: RepositoryInfo, current_changes: ChangesInfo
 ) -> list[DriftItem]:
     items: list[DriftItem] = []
     old_repo = recorded.repository
 
-    if old_repo.root != current_repository.root:
-        items.append(
-            DriftItem(
-                field="repository_root",
-                severity=Severity.BLOCKING,
-                message="The repository root does not match the recorded checkpoint.",
-                old=old_repo.root,
-                new=current_repository.root,
-            )
-        )
+    items.extend(_compute_repository_identity_drift(old_repo, current_repository))
 
     if old_repo.branch != current_repository.branch:
         items.append(

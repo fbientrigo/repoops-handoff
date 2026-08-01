@@ -29,6 +29,13 @@ class RepositoryInfo(BaseModel):
     ahead: int | None = None
     behind: int | None = None
     dirty: bool = False
+    remote_identity: str | None = None
+    """Normalized `host/owner/repo`-style identity derived from `remote.origin.url`.
+
+    Never the raw remote URL: normalization strips credentials, tokens, query strings,
+    and scheme/syntax differences so equivalent SSH and HTTPS remotes compare equal.
+    `None` when no origin remote is configured or it could not be parsed.
+    """
 
 
 class ChangesInfo(BaseModel):

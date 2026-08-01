@@ -34,6 +34,10 @@ ALLOWED_GIT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("diff", "--stat"),
         ("diff", "--cached", "--stat"),
         ("log", "-5", "--pretty=format:%h\x1f%ad\x1f%s", "--date=iso-strict"),
+        # Local config read only -- never touches the network. Used by repoops.handoff to
+        # derive a stable repository identity that survives the repo being relocated to a
+        # different absolute path (a different clone, machine, or container).
+        ("config", "--get", "remote.origin.url"),
     }
 )
 
@@ -118,7 +122,6 @@ class ChangeCounts(BaseModel):
     deleted: int = 0
     renamed: int = 0
     conflicted: int = 0
-
 
 
 class PorcelainEntry(BaseModel):
@@ -334,6 +337,15 @@ def _is_ci_file(path: str) -> bool:
         or normalized == ".gitlab-ci.yml"
         or Path(normalized).name == "Jenkinsfile"
     )
+
+
+def get_remote_origin_url(repo_path: Path) -> str | None:
+    """Return the configured `remote.origin.url`, or None if unset. Read-only; no network."""
+    result = _run_git(repo_path, ("config", "--get", "remote.origin.url"))
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
 
 
 def _run_git(repo_path: Path, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:

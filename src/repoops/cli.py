@@ -87,10 +87,24 @@ def checkpoint(
     path: Path = typer.Argument(
         Path("."), help="Path inside the Git repository to checkpoint. Defaults to '.'."
     ),
+    reset_semantic: bool = typer.Option(
+        False,
+        "--reset-semantic",
+        help=(
+            "Discard any existing semantic notes and next action, replacing them with "
+            "TODO placeholders. Destructive -- without this flag, a repeat checkpoint "
+            "preserves existing semantic content instead."
+        ),
+    ),
 ) -> None:
-    """Write a deterministic handoff checkpoint (.repoops/handoff.json + HANDOFF.md)."""
+    """Write a deterministic handoff checkpoint (.repoops/handoff.json + HANDOFF.md).
+
+    Repeated runs refresh deterministic Git facts (branch, HEAD, worktree, remote, diff
+    stats, recent commits, timestamp) while preserving prior semantic notes and the next
+    action, unless `--reset-semantic` is given.
+    """
     try:
-        handoff = create_checkpoint(path)
+        handoff = create_checkpoint(path, reset_semantic=reset_semantic)
     except HandoffError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
