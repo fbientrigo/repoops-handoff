@@ -103,3 +103,31 @@
 - `resume` with no checkpoint at all reports `BLOCKING` and suggests running `repoops checkpoint .`.
 - CLI exit code is `1` for any `BLOCKING` overall severity, `0` otherwise (`NONE`/`WARNING`).
 - `repoops scan`/`run`/`worklog-scan` are unaffected by `repoops.handoff` (regression coverage for unrelated existing functionality).
+- `HANDOFF.md` states near the top that `handoff.json` is canonical and that manual Markdown edits are not consumed by `resume`.
+- `HANDOFF.md` renders the actual content of decisions, failed attempts, and verification entries — never reduces them to bare counts.
+- `resume` output includes the actual decisions, failed attempts, passed/pending verification, and the exact success condition — not just goal and a completed-count.
+
+## Semantic preservation tests (`repoops checkpoint`, P0 hardening)
+
+- A second `checkpoint` on the same repository preserves every edited `semantic` field and every `next_action` field verbatim.
+- A second `checkpoint` still refreshes deterministic Git facts (branch, HEAD, worktree, remote, diff stats, recent commits) and the timestamp.
+- The regenerated `HANDOFF.md` after a second `checkpoint` contains the preserved actual semantic values, not `TODO:` placeholders.
+- `resume` after a second `checkpoint` surfaces the preserved semantic values in its output.
+- `checkpoint --reset-semantic` replaces existing semantic/next-action content with `TODO:` placeholders.
+- `checkpoint` without `--reset-semantic` never resets semantic content on its own.
+- `checkpoint` fails non-zero, with an explanatory message, when the existing `handoff.json` is invalid JSON, has an unsupported schema, or is structurally invalid — and leaves both `handoff.json` and `HANDOFF.md` byte-for-byte unchanged.
+- `checkpoint --reset-semantic` recovers from an existing invalid/unusable `handoff.json`.
+- `checkpoint` fails non-zero when the existing `handoff.json` is identifiable as belonging to a different repository (different root, no matching remote identity), and leaves both files unchanged.
+
+## Repository relocation tests (`repoops resume`, P0 hardening)
+
+- `normalize_remote_identity` maps `git@host:owner/repo.git`, `https://host/owner/repo.git`, and `ssh://git@host/owner/repo.git` (with/without `.git`, trailing slash, port) to the same identity.
+- `normalize_remote_identity` returns different identities for a different owner or host.
+- `normalize_remote_identity` returns `None` for empty input or an unparseable local path.
+- `normalize_remote_identity` never returns embedded HTTPS credentials, tokens, or query-string values — verified with a URL containing an embedded token.
+- Same repository root, same remote: no relocation drift, overall severity `NONE`.
+- Different root, same normalized remote identity (SSH vs. HTTPS forms of the same repo): `WARNING` (`repository_relocated`), exit code `0`.
+- Different root, different normalized remote identity: `BLOCKING`, exit code `1`.
+- Different root, remote identity unavailable on one or both sides: `BLOCKING`, exit code `1`.
+- Remote identity changed at the same root (both sides known and different): `BLOCKING`.
+- No secret substring (embedded credential/token) appears in `handoff.json`, `HANDOFF.md`, `resume` output, or `checkpoint` output for a repository with a credential-embedded remote URL.

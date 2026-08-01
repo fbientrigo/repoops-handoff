@@ -167,7 +167,8 @@ semantic/next-action section).
     "upstream": "origin/main",
     "ahead": 0,
     "behind": 0,
-    "dirty": true
+    "dirty": true,
+    "remote_identity": "github.com/fbientrigo/repoops-handoff"
   },
   "changes": {
     "counts": {
@@ -211,8 +212,8 @@ semantic/next-action section).
 | `repository` | object | See below. |
 | `changes` | object | See below. |
 | `recent_commits` | array | Up to 5 most recent commits (`git log -5`), each `{short_hash, date, subject}`. Bounded by a fixed limit, not configurable in P0. |
-| `semantic` | object | Human/agent-editable. Every `checkpoint` run overwrites this with fresh `TODO:` placeholders — `repoops` never infers or carries forward project intent. Edit the file after checkpointing if you want it to say something else. |
-| `next_action` | object | Human/agent-editable, same placeholder rule as `semantic`. |
+| `semantic` | object | Human/agent-editable. `repoops` never infers this content. By default, `checkpoint` preserves the existing `semantic` section from a prior, same-repository checkpoint across repeated runs; only `checkpoint --reset-semantic` (or a first-ever checkpoint) replaces it with `TODO:` placeholders. See "Semantic preservation" below. |
+| `next_action` | object | Human/agent-editable, same preservation/reset rule as `semantic`. |
 
 ### `repository`
 
@@ -226,6 +227,50 @@ semantic/next-action section).
 | `upstream` | string/null | e.g. `origin/main`, or `null` when no upstream is configured. |
 | `ahead` / `behind` | int/null | Computed from local refs only (`git rev-list --count`) — `repoops checkpoint`/`resume` never run `git fetch`, so these can be stale relative to the actual remote. `null` when there is no upstream. |
 | `dirty` | bool | Whether porcelain status has entries (excluding `.repoops/` itself — see below). |
+| `remote_identity` | string/null | Normalized `host/owner/repo`-shaped identity derived from `git config --get remote.origin.url` (see "Repository relocation" below). `null` when no origin remote is configured or it could not be parsed. Never the raw remote URL — credentials, tokens, and query strings are never stored. |
+
+### Semantic preservation
+
+By default, `repoops checkpoint` treats `semantic` and `next_action` as durable
+state, not derived facts: if `.repoops/handoff.json` already exists, is valid, and
+can be identified as belonging to the current repository (see "Repository
+relocation"), its `semantic` and `next_action` are copied into the new checkpoint
+unchanged, while every other field is recomputed fresh. This is what makes the
+`checkpoint` → edit `handoff.json` → `checkpoint` → `resume` workflow safe to run
+repeatedly without losing recorded context.
+
+`repoops checkpoint --reset-semantic` bypasses preservation unconditionally and
+writes fresh `TODO:` placeholders, regardless of what existed before — including
+an existing file that was invalid or unsafe to preserve from. This is the only
+way `semantic`/`next_action` are intentionally discarded.
+
+If `.repoops/handoff.json` exists but is invalid JSON, has an unsupported
+`schema_version`, fails schema validation, or belongs to a different repository,
+`checkpoint` (without `--reset-semantic`) fails with a non-zero exit code and
+leaves both `handoff.json` and `HANDOFF.md` unchanged — it never overwrites
+unrecognized or suspicious prior state with placeholders.
+
+### Repository relocation
+
+`repository.root` is an absolute path, which is not stable across clones,
+machines, or containers. `remote_identity` provides an additional, independent
+signal of "is this the same repository": it normalizes `remote.origin.url` so
+that equivalent SSH and HTTPS forms of the same remote compare equal, for example
+all of
+
+```text
+git@github.com:owner/repo.git
+https://github.com/owner/repo.git
+ssh://git@github.com/owner/repo.git
+```
+
+normalize to the identity `github.com/owner/repo`. Normalization drops the
+scheme, any embedded username/password/token, the `.git` suffix, trailing
+slashes, and query strings/fragments — none of that is ever written to
+`handoff.json`, `HANDOFF.md`, or printed by `repoops resume`.
+
+`repository.root` is still recorded as contextual evidence, but a root mismatch
+alone is no longer automatically `BLOCKING` — see the drift table below.
 
 ### `changes`
 
@@ -246,7 +291,7 @@ paths out of `git status`/`git diff --stat` output before computing counts,
 ### Handoff-specific allowed Git commands
 
 `repoops checkpoint`/`repoops resume` reuse `git_scan.py`'s `_run_git` whitelist
-enforcement (see `docs/SAFETY_CONTRACT.md`) and add five read-only, metadata/stat-only
+enforcement (see `docs/SAFETY_CONTRACT.md`) and add six read-only, metadata/stat-only
 commands on top of the existing v1 list:
 
 ```text
@@ -255,7 +300,12 @@ git rev-parse HEAD
 git diff --stat
 git diff --cached --stat
 git log -5 --pretty=format:%h<US>%ad<US>%s --date=iso-strict
+git config --get remote.origin.url
 ```
+
+`git config --get remote.origin.url` is local-config-only — it never touches the
+network — and is used solely to derive `remote_identity` (see "Repository
+relocation" above).
 
 (`<US>` is the ASCII unit-separator `\x1f`, used as a field delimiter so commit
 subjects containing arbitrary characters parse unambiguously.) Ahead/behind and
@@ -275,7 +325,12 @@ severity:
 | `handoff.json` is not valid JSON | `BLOCKING` |
 | `schema_version` does not equal `repoops.handoff.v1` | `BLOCKING` |
 | `handoff.json` is valid JSON but fails schema validation | `BLOCKING` |
-| `repository.root` does not match the recorded checkpoint | `BLOCKING` |
+| Same `repository.root` | no relocation drift |
+| Different `repository.root`, same normalized `remote_identity` (both non-empty) | `WARNING` (`repository_relocated`) — a legitimate relocation, not blocking by itself |
+| Different `repository.root`, different normalized `remote_identity` (both non-empty) | `BLOCKING` — likely another repository |
+| Different `repository.root`, `remote_identity` unavailable on either side | `BLOCKING` — no stable evidence it's the same repository |
+| `remote_identity` changed at the same `repository.root`, both non-empty and different | `BLOCKING` |
+| `remote_identity` changed at the same `repository.root`, one side empty/unknown | `WARNING` |
 | `repository.branch` changed | `BLOCKING` |
 | `repository.detached_head` changed | `WARNING` |
 | `repository.head_full` changed (HEAD moved) | `WARNING` |

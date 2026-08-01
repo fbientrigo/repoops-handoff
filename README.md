@@ -139,22 +139,35 @@ cd /path/to/your/repo
 
 # End of session: write a deterministic checkpoint.
 repoops checkpoint .
-# -> .repoops/handoff.json
-# -> .repoops/HANDOFF.md
+# -> .repoops/handoff.json   (canonical, editable)
+# -> .repoops/HANDOFF.md     (generated rendering — do not hand-edit)
+
+# Edit .repoops/handoff.json by hand: fill in "semantic" (goal, scope,
+# decisions, failed attempts, verification) and "next_action". repoops never
+# invents your goal. Then refresh the Markdown view (your edits are preserved):
+repoops checkpoint .
 
 # Open a fresh Codex / Claude Code / Gemini / etc. session and paste in
-# .repoops/HANDOFF.md (or handoff.json). Edit the "Semantic notes" and
-# "Next action" sections by hand first — repoops never invents your goal.
+# .repoops/HANDOFF.md (or handoff.json).
 
-# New session, same or different machine: validate before continuing.
+# New session, same or different machine/clone/container: validate before continuing.
 repoops resume .
 ```
 
+Repeated `repoops checkpoint .` runs never discard your edits: deterministic Git
+facts (branch, HEAD, worktree, remote, diff stats, recent commits, timestamp) are
+refreshed every time, while `semantic`/`next_action` are carried forward
+unchanged. Use `repoops checkpoint . --reset-semantic` to intentionally discard
+them and start over with `TODO:` placeholders.
+
 `repoops resume` prints four sections — `RECORDED HANDOFF`, `CURRENT REPOSITORY
 STATE`, `DRIFT DETECTED`, `NEXT ACTION` — and exits non-zero if the drift is
-`BLOCKING` (e.g. the branch changed, or the checkpoint's repository root doesn't
-match). It never claims it's safe to continue when meaningful drift exists. See
-`docs/CLI_CONTRACT.md` and `docs/DATA_CONTRACTS.md` for the full contract.
+`BLOCKING` (e.g. the branch changed, or the checkpoint clearly belongs to a
+different repository). Moving the same repository to a new clone, machine, or
+container is not itself blocking — see "Repository relocation" in
+`docs/CLI_CONTRACT.md`. It never claims it's safe to continue when meaningful
+drift exists. See `docs/CLI_CONTRACT.md` and `docs/DATA_CONTRACTS.md` for the
+full contract.
 
 ### P0 handoff scope
 
@@ -162,12 +175,19 @@ match). It never claims it's safe to continue when meaningful drift exists. See
 
 * deterministic Git fact collection (branch, HEAD, upstream/ahead/behind from
   local refs, porcelain status counts, notable changed paths, `diff --stat`
-  summaries, up to 5 recent commits);
-* a small human/agent-editable semantic section, always seeded with explicit
-  `TODO:` placeholders — never invented;
-* `.repoops/handoff.json` (schema) and `.repoops/HANDOFF.md` (pasteable rendering);
+  summaries, up to 5 recent commits, a normalized Git remote identity);
+* `.repoops/handoff.json` — the canonical, human/agent-editable source (goal,
+  scope, decisions, failed attempts, verification, next action), always seeded
+  with explicit `TODO:` placeholders on a first checkpoint — never invented —
+  and preserved across repeated checkpoints unless `--reset-semantic` is passed;
+* `.repoops/HANDOFF.md` — a deterministic, generated rendering of the JSON with
+  full semantic content (not just counts); never hand-edit it, it is overwritten
+  by the next checkpoint and never read by `resume`;
 * `repoops resume` drift detection (`NONE`/`WARNING`/`BLOCKING`) against the
-  recorded checkpoint, with a non-zero exit code on `BLOCKING` drift.
+  recorded checkpoint, with a non-zero exit code on `BLOCKING` drift;
+* minimal repository-relocation support: a checkpoint copied to a different
+  clone, machine, or container of the *same* repository is `WARNING`, not
+  `BLOCKING`, as long as the Git remote identity still matches.
 
 Not implemented in P0 (see "Scope control" in the P0 spec — later phases only):
 
@@ -175,7 +195,8 @@ Not implemented in P0 (see "Scope control" in the P0 spec — later phases only)
 * automatic LLM-generated summaries (no LLM is ever invoked internally);
 * Telegram/Slack/email notification changes;
 * GitHub publishing;
-* multi-machine synchronization;
+* cloud/multi-machine synchronization of checkpoints (relocation support only
+  corrects repository *identity*, it does not transfer or sync files);
 * CI inspection;
 * test execution from configuration;
 * autonomous agent execution;

@@ -38,7 +38,7 @@ All of the above are read-only and metadata-only — they inspect local refs and
 
 ### Additional commands for `repoops checkpoint` / `repoops resume`
 
-`repoops.handoff` (backing `repoops checkpoint`/`repoops resume`) adds five more
+`repoops.handoff` (backing `repoops checkpoint`/`repoops resume`) adds six more
 commands to the same `ALLOWED_GIT_COMMANDS` whitelist in `git_scan.py`, enforced by
 the same `_run_git`:
 
@@ -48,14 +48,16 @@ git rev-parse HEAD
 git diff --stat
 git diff --cached --stat
 git log -5 --pretty=format:%h<US>%ad<US>%s --date=iso-strict
+git config --get remote.origin.url
 ```
 
-All five are read-only and never touch the network. `diff --stat`/`diff --cached
+All six are read-only and never touch the network. `diff --stat`/`diff --cached
 --stat` report changed filenames and insertion/deletion counts only — never file
 contents or the actual diff body — which satisfies "never include full diffs"
-below. `log` is capped at a fixed 5-commit limit, not configurable. `repoops
-checkpoint`/`repoops resume` never call `git fetch`: ahead/behind are always
-computed from local refs only, the same way as `repoops scan` without `--fetch`.
+below. `log` is capped at a fixed 5-commit limit, not configurable. `config --get`
+reads local repository config only. `repoops checkpoint`/`repoops resume` never
+call `git fetch`: ahead/behind are always computed from local refs only, the same
+way as `repoops scan` without `--fetch`.
 
 ## Command whitelist enforcement
 
@@ -149,9 +151,23 @@ metadata inspection, with one narrow, explicit exception.
   --cached --stat` (filenames + line-change counts) are used — see "Allowed Git
   commands" above.
 - **No LLM is ever invoked internally.** The `semantic` and `next_action` sections
-  of a checkpoint are always written as literal `TODO:` placeholders — never
-  generated, inferred, or asserted as fact — for a human or an external coding
-  agent to fill in after the file is written.
+  start as literal `TODO:` placeholders on a first checkpoint — never generated,
+  inferred, or asserted as fact — for a human or an external coding agent to fill
+  in. By default, a repeat `checkpoint` on the same repository *preserves* whatever
+  the human/agent wrote there rather than re-generating anything; only
+  `checkpoint --reset-semantic` replaces it, and only with the same literal
+  placeholders, never invented content.
+- **Never overwrites unrecognized prior state.** If `.repoops/handoff.json` already
+  exists but is invalid JSON, has an unsupported schema, fails validation, or is
+  identifiable as belonging to a different repository, `checkpoint` (without
+  `--reset-semantic`) fails non-zero and leaves both existing files byte-for-byte
+  unchanged rather than silently discarding them.
+- **The stored repository identity never contains a raw remote URL.** `remote
+  .origin.url` is read only to compute `remote_identity`, a normalized
+  `host/owner/repo`-shaped string; `normalize_remote_identity` strips scheme,
+  userinfo (username/password/token), port, `.git` suffix, and query
+  string/fragment before anything is stored. The raw URL itself is never written
+  to `handoff.json`, rendered in `HANDOFF.md`, or printed by `resume`/`checkpoint`.
 - **Redacts secret-like paths in three places, not just one.** `notable_paths`
   reuses `git_scan.redact_secret_like_path` directly (same as `repoops scan`/`run`).
   `diff_stat`/`cached_diff_stat` run each stat line's path segment (including
@@ -165,9 +181,13 @@ metadata inspection, with one narrow, explicit exception.
   shows up as drift the next time `repoops checkpoint` or `repoops resume` runs
   (see `docs/DATA_CONTRACTS.md` → "Handoff schema").
 - **`repoops resume` never claims safety it cannot verify.** A missing checkpoint,
-  invalid JSON, an unsupported `schema_version`, or a repository-root mismatch are
+  invalid JSON, an unsupported `schema_version`, or a repository identity mismatch
+  (different root with a different or unavailable normalized remote identity) are
   each reported as an explicit `BLOCKING` drift item — never silently ignored or
-  downgraded — and the command exits non-zero.
+  downgraded — and the command exits non-zero. A repository root change alone,
+  when the normalized remote identity still matches, is a `WARNING`
+  (`repository_relocated`) rather than `BLOCKING` — relocating the same checkout
+  to a different clone, machine, or container is expected, not an error.
 - **`.repoops/` is not auto-added to `.gitignore`.** Whether to commit or ignore
   checkpoint files is left to the user; see README "Should you commit `.repoops/`?".
 
