@@ -25,6 +25,15 @@ ALLOWED_GIT_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
         ("rev-list", "--count", "@{u}..HEAD"),
         ("rev-list", "--count", "HEAD..@{u}"),
+        # The five below are used only by repoops.handoff (`repoops checkpoint`/`repoops
+        # resume`). All are read-only and metadata/stat-only — `diff --stat` and
+        # `diff --cached --stat` report changed filenames and line counts, never file
+        # contents or full diffs; `log` is capped at a fixed 5-commit limit.
+        ("rev-parse", "--show-toplevel"),
+        ("rev-parse", "HEAD"),
+        ("diff", "--stat"),
+        ("diff", "--cached", "--stat"),
+        ("log", "-5", "--pretty=format:%h\x1f%ad\x1f%s", "--date=iso-strict"),
     }
 )
 

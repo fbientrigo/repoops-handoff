@@ -6,6 +6,8 @@ import typer
 
 from repoops.config import load_config
 from repoops.git_scan import build_snapshot
+from repoops.handoff import HandoffError, create_checkpoint, handoff_paths, run_resume
+from repoops.handoff_render import render_resume_report
 from repoops.notify import notify_report
 from repoops.paths import ensure_dir
 from repoops.report import print_summary_table, print_worklog_candidates, render_markdown
@@ -78,6 +80,42 @@ def notify_cmd(
     cfg = load_config(config)
     result = notify_report(cfg, report)
     typer.echo(f"Notification: {result.status} ({result.reason or result.channel})")
+
+
+@app.command()
+def checkpoint(
+    path: Path = typer.Argument(
+        Path("."), help="Path inside the Git repository to checkpoint. Defaults to '.'."
+    ),
+) -> None:
+    """Write a deterministic handoff checkpoint (.repoops/handoff.json + HANDOFF.md)."""
+    try:
+        handoff = create_checkpoint(path)
+    except HandoffError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    json_path, md_path = handoff_paths(Path(handoff.repository.root))
+    typer.echo(f"Checkpoint written: {json_path}")
+    typer.echo(f"Handoff markdown: {md_path}")
+
+
+@app.command()
+def resume(
+    path: Path = typer.Argument(
+        Path("."), help="Path inside the Git repository to resume. Defaults to '.'."
+    ),
+) -> None:
+    """Compare current repository state against the recorded checkpoint and print
+    a continuation report. Read-only: never modifies the checkpoint."""
+    try:
+        report = run_resume(path)
+    except HandoffError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(render_resume_report(report))
+    raise typer.Exit(code=report.exit_code)
 
 
 @app.command(name="worklog-scan")
