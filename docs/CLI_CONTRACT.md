@@ -59,6 +59,69 @@ Behavior:
 
 `channel: telegram` sends a short synthesis of the report (see `docs/SAFETY_CONTRACT.md` → "Telegram backend"). It requires `REPOOPS_TELEGRAM_BOT_TOKEN` and `REPOOPS_TELEGRAM_CHAT_ID` in the environment; missing variables raise immediately, while a failed API call is reported as `skipped` rather than raised. `slack` and `email` remain `NotImplementedError` stubs.
 
+## `repoops checkpoint [PATH]`
+
+```bash
+repoops checkpoint .
+repoops checkpoint /path/to/repo
+```
+
+Behavior:
+
+- `PATH` defaults to the current directory;
+- discovers the Git repository root from `PATH` (works from any subdirectory);
+- collects deterministic, read-only Git facts (branch, HEAD, upstream/ahead/behind
+  from local refs only, porcelain status counts, a bounded list of notable changed
+  paths, `git diff --stat`, `git diff --cached --stat`, and up to 5 recent commits);
+- writes `.repoops/handoff.json` and `.repoops/HANDOFF.md` at the repository root,
+  atomically;
+- the only files this command ever writes are those two — it never runs `git pull`,
+  `git push`, `git reset`, `git clean`, `git fetch`, or any other mutating or
+  network-touching Git command, and never invokes an LLM;
+- every checkpoint's `semantic` section (goal, scope, decisions, ...) is written
+  with explicit `TODO:` placeholders — `repoops` never invents project intent;
+- prints the two written paths and exits `0`.
+
+`.repoops/` itself is excluded from the collected Git facts (status counts, notable
+paths, diff stats) so writing a checkpoint never shows up as drift on the very next
+`repoops resume`.
+
+## `repoops resume [PATH]`
+
+```bash
+repoops resume .
+repoops resume /path/to/repo
+```
+
+Behavior:
+
+- `PATH` defaults to the current directory;
+- discovers the Git repository root from `PATH`;
+- loads and validates `.repoops/handoff.json` (missing file, invalid JSON, and an
+  unsupported `schema_version` are each reported as a distinct `BLOCKING` drift
+  item, never a raw traceback);
+- collects the same deterministic Git facts `checkpoint` collects, for the
+  current state;
+- compares recorded vs. current state and prints four clearly separated sections
+  to stdout: `RECORDED HANDOFF`, `CURRENT REPOSITORY STATE`, `DRIFT DETECTED`,
+  `NEXT ACTION`;
+- never modifies `.repoops/handoff.json` or `.repoops/HANDOFF.md`;
+- never claims it is safe to continue when `WARNING` or `BLOCKING` drift exists.
+
+Drift severities (see `docs/DATA_CONTRACTS.md` for the full table):
+
+| Condition | Severity |
+| --- | --- |
+| No checkpoint found / invalid JSON / unsupported schema version | `BLOCKING` |
+| Repository root does not match the recorded checkpoint | `BLOCKING` |
+| Branch changed | `BLOCKING` |
+| Detached-HEAD state changed | `WARNING` |
+| HEAD changed on the same branch | `WARNING` |
+| Worktree state changed (dirty flag or any count) | `WARNING` |
+| Nothing changed | `NONE` |
+
+Exit code is `1` if the overall severity is `BLOCKING`, otherwise `0`.
+
 ## `repoops worklog-scan`
 
 ```bash

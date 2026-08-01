@@ -82,3 +82,24 @@
 - An `HTTPError` raises `TelegramError` containing only the HTTP status code — never the bot token or URL.
 - A `URLError` raises `TelegramError` containing only the sanitized connection reason — never the bot token or URL.
 - A non-200 status without an exception still raises `TelegramError`.
+
+## Handoff tests (`repoops checkpoint` / `repoops resume`)
+
+- `checkpoint` creates `.repoops/handoff.json` + `HANDOFF.md` in a clean repository; recorded `dirty=False`, all counts `0`.
+- `checkpoint` in a dirty repository records correct `modified`/`untracked` counts and a non-empty `diff_stat`.
+- `checkpoint` records staged and untracked changes distinctly (`counts.staged`, `counts.untracked`, `cached_diff_stat`).
+- `checkpoint` in a detached-HEAD repo records `detached_head=True`, `branch=None`.
+- `checkpoint` discovers the repository root correctly when run from a subdirectory.
+- `checkpoint` redacts secret-like paths in `notable_paths`, `diff_stat`, and the rendered Markdown — never leaks matched content (e.g. `.env` contents, `credentials` in a filename).
+- Writing a checkpoint never shows up as drift on the immediately following `resume` (`.repoops/` is excluded from collected facts).
+- `resume` immediately after `checkpoint` reports overall severity `NONE`, exit code `0`.
+- `resume` after a branch change reports a `BLOCKING` `branch` drift item with exact old/new values.
+- `resume` after a same-branch commit reports a `WARNING` (not `BLOCKING`) `head` drift item.
+- `resume` when only the dirty/untracked count changed reports `WARNING`, not `BLOCKING`.
+- `resume` with invalid JSON in `handoff.json` reports `BLOCKING` with no traceback leaked to the user.
+- `resume` with an unsupported `schema_version` reports a distinct `BLOCKING` message naming the version, separate from a generic validation failure.
+- `resume` with a well-formed but shape-invalid `handoff.json` (missing required fields) reports `BLOCKING`.
+- `resume` against a repository whose recorded `repository.root` doesn't match the current root (simulating a moved/renamed clone) reports `BLOCKING` with exact old/new paths.
+- `resume` with no checkpoint at all reports `BLOCKING` and suggests running `repoops checkpoint .`.
+- CLI exit code is `1` for any `BLOCKING` overall severity, `0` otherwise (`NONE`/`WARNING`).
+- `repoops scan`/`run`/`worklog-scan` are unaffected by `repoops.handoff` (regression coverage for unrelated existing functionality).

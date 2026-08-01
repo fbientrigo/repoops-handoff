@@ -130,6 +130,72 @@ repos:
     path: ~/vectorjobs
 ```
 
+## Quick start: checkpoint -> validate -> resume (P0 handoff)
+
+The fastest way to hand off a session to another coding agent, config-free:
+
+```bash
+cd /path/to/your/repo
+
+# End of session: write a deterministic checkpoint.
+repoops checkpoint .
+# -> .repoops/handoff.json
+# -> .repoops/HANDOFF.md
+
+# Open a fresh Codex / Claude Code / Gemini / etc. session and paste in
+# .repoops/HANDOFF.md (or handoff.json). Edit the "Semantic notes" and
+# "Next action" sections by hand first — repoops never invents your goal.
+
+# New session, same or different machine: validate before continuing.
+repoops resume .
+```
+
+`repoops resume` prints four sections — `RECORDED HANDOFF`, `CURRENT REPOSITORY
+STATE`, `DRIFT DETECTED`, `NEXT ACTION` — and exits non-zero if the drift is
+`BLOCKING` (e.g. the branch changed, or the checkpoint's repository root doesn't
+match). It never claims it's safe to continue when meaningful drift exists. See
+`docs/CLI_CONTRACT.md` and `docs/DATA_CONTRACTS.md` for the full contract.
+
+### P0 handoff scope
+
+`repoops checkpoint`/`repoops resume` are deliberately minimal. Implemented:
+
+* deterministic Git fact collection (branch, HEAD, upstream/ahead/behind from
+  local refs, porcelain status counts, notable changed paths, `diff --stat`
+  summaries, up to 5 recent commits);
+* a small human/agent-editable semantic section, always seeded with explicit
+  `TODO:` placeholders — never invented;
+* `.repoops/handoff.json` (schema) and `.repoops/HANDOFF.md` (pasteable rendering);
+* `repoops resume` drift detection (`NONE`/`WARNING`/`BLOCKING`) against the
+  recorded checkpoint, with a non-zero exit code on `BLOCKING` drift.
+
+Not implemented in P0 (see "Scope control" in the P0 spec — later phases only):
+
+* `--target codex` / `--target claude` / `--target gemini` renderers;
+* automatic LLM-generated summaries (no LLM is ever invoked internally);
+* Telegram/Slack/email notification changes;
+* GitHub publishing;
+* multi-machine synchronization;
+* CI inspection;
+* test execution from configuration;
+* autonomous agent execution;
+* work-hour estimation changes;
+* new worklog functionality.
+
+### Should you commit `.repoops/`?
+
+`repoops` does not decide this for you and does not add `.repoops/` to
+`.gitignore` automatically. Two reasonable choices:
+
+- **Ignore it** (add `.repoops/` to your own `.gitignore`) if checkpoints are a
+  personal, ephemeral scratch file you regenerate each session.
+- **Commit it** if you want checkpoint history reviewable alongside the code, or
+  want teammates/agents on a fresh clone to see the last recorded handoff.
+
+Either way, `repoops checkpoint`/`repoops resume` exclude `.repoops/` itself from
+the Git facts they collect, so writing a checkpoint never shows up as drift on the
+very next scan regardless of which choice you make.
+
 ## Planned CLI
 
 ```bash
@@ -141,6 +207,8 @@ repoops notify --config examples/repos.yaml --report ~/.local/share/repoops/repo
 repoops worklog-scan --config examples/repos.yaml
 repoops worklog-weekly --config examples/repos.yaml --week 2026-W28
 repoops worklog-export --config examples/repos.yaml --month 2026-07 --format csv
+repoops checkpoint [PATH]
+repoops resume [PATH]
 ```
 
 ### `repoops scan`
@@ -163,6 +231,12 @@ Sends an already-generated report through the configured notification backend.
 ### `repoops worklog-scan` / `worklog-weekly` / `worklog-export`
 
 Record and summarize worklog evidence from repeated scans. See "Worklog evidence" below for what these can and cannot prove.
+
+### `repoops checkpoint [PATH]` / `repoops resume [PATH]`
+
+Config-free, single-repository handoff generation and validation. `PATH` defaults
+to `.`; both commands discover the Git repository root from it. See "Quick start:
+checkpoint -> validate -> resume" above and `docs/CLI_CONTRACT.md`.
 
 ### `--fetch`
 
@@ -461,7 +535,10 @@ Notification output must avoid leaking secrets. It should never include file con
 
 * GitHub Actions inspection.
 * CI failure summarization.
-* Agent handoff Markdown generation.
+* Agent handoff Markdown generation. A minimal, config-free slice of this
+  (`repoops checkpoint`/`repoops resume`, deterministic facts only, no LLM) has
+  landed as P0 — see "Quick start: checkpoint -> validate -> resume" above.
+  GitHub Actions inspection and CI failure summarization are still not implemented.
 
 ### v4
 
