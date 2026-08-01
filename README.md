@@ -130,6 +130,93 @@ repos:
     path: ~/vectorjobs
 ```
 
+## Quick start: checkpoint -> validate -> resume (P0 handoff)
+
+The fastest way to hand off a session to another coding agent, config-free:
+
+```bash
+cd /path/to/your/repo
+
+# End of session: write a deterministic checkpoint.
+repoops checkpoint .
+# -> .repoops/handoff.json   (canonical, editable)
+# -> .repoops/HANDOFF.md     (generated rendering — do not hand-edit)
+
+# Edit .repoops/handoff.json by hand: fill in "semantic" (goal, scope,
+# decisions, failed attempts, verification) and "next_action". repoops never
+# invents your goal. Then refresh the Markdown view (your edits are preserved):
+repoops checkpoint .
+
+# Open a fresh Codex / Claude Code / Gemini / etc. session and paste in
+# .repoops/HANDOFF.md (or handoff.json).
+
+# New session, same or different machine/clone/container: validate before continuing.
+repoops resume .
+```
+
+Repeated `repoops checkpoint .` runs never discard your edits: deterministic Git
+facts (branch, HEAD, worktree, remote, diff stats, recent commits, timestamp) are
+refreshed every time, while `semantic`/`next_action` are carried forward
+unchanged. Use `repoops checkpoint . --reset-semantic` to intentionally discard
+them and start over with `TODO:` placeholders.
+
+`repoops resume` prints four sections — `RECORDED HANDOFF`, `CURRENT REPOSITORY
+STATE`, `DRIFT DETECTED`, `NEXT ACTION` — and exits non-zero if the drift is
+`BLOCKING` (e.g. the branch changed, or the checkpoint clearly belongs to a
+different repository). Moving the same repository to a new clone, machine, or
+container is not itself blocking — see "Repository relocation" in
+`docs/CLI_CONTRACT.md`. It never claims it's safe to continue when meaningful
+drift exists. See `docs/CLI_CONTRACT.md` and `docs/DATA_CONTRACTS.md` for the
+full contract.
+
+### P0 handoff scope
+
+`repoops checkpoint`/`repoops resume` are deliberately minimal. Implemented:
+
+* deterministic Git fact collection (branch, HEAD, upstream/ahead/behind from
+  local refs, porcelain status counts, notable changed paths, `diff --stat`
+  summaries, up to 5 recent commits, a normalized Git remote identity);
+* `.repoops/handoff.json` — the canonical, human/agent-editable source (goal,
+  scope, decisions, failed attempts, verification, next action), always seeded
+  with explicit `TODO:` placeholders on a first checkpoint — never invented —
+  and preserved across repeated checkpoints unless `--reset-semantic` is passed;
+* `.repoops/HANDOFF.md` — a deterministic, generated rendering of the JSON with
+  full semantic content (not just counts); never hand-edit it, it is overwritten
+  by the next checkpoint and never read by `resume`;
+* `repoops resume` drift detection (`NONE`/`WARNING`/`BLOCKING`) against the
+  recorded checkpoint, with a non-zero exit code on `BLOCKING` drift;
+* minimal repository-relocation support: a checkpoint copied to a different
+  clone, machine, or container of the *same* repository is `WARNING`, not
+  `BLOCKING`, as long as the Git remote identity still matches.
+
+Not implemented in P0 (see "Scope control" in the P0 spec — later phases only):
+
+* `--target codex` / `--target claude` / `--target gemini` renderers;
+* automatic LLM-generated summaries (no LLM is ever invoked internally);
+* Telegram/Slack/email notification changes;
+* GitHub publishing;
+* cloud/multi-machine synchronization of checkpoints (relocation support only
+  corrects repository *identity*, it does not transfer or sync files);
+* CI inspection;
+* test execution from configuration;
+* autonomous agent execution;
+* work-hour estimation changes;
+* new worklog functionality.
+
+### Should you commit `.repoops/`?
+
+`repoops` does not decide this for you and does not add `.repoops/` to
+`.gitignore` automatically. Two reasonable choices:
+
+- **Ignore it** (add `.repoops/` to your own `.gitignore`) if checkpoints are a
+  personal, ephemeral scratch file you regenerate each session.
+- **Commit it** if you want checkpoint history reviewable alongside the code, or
+  want teammates/agents on a fresh clone to see the last recorded handoff.
+
+Either way, `repoops checkpoint`/`repoops resume` exclude `.repoops/` itself from
+the Git facts they collect, so writing a checkpoint never shows up as drift on the
+very next scan regardless of which choice you make.
+
 ## Planned CLI
 
 ```bash
@@ -141,6 +228,8 @@ repoops notify --config examples/repos.yaml --report ~/.local/share/repoops/repo
 repoops worklog-scan --config examples/repos.yaml
 repoops worklog-weekly --config examples/repos.yaml --week 2026-W28
 repoops worklog-export --config examples/repos.yaml --month 2026-07 --format csv
+repoops checkpoint [PATH]
+repoops resume [PATH]
 ```
 
 ### `repoops scan`
@@ -163,6 +252,12 @@ Sends an already-generated report through the configured notification backend.
 ### `repoops worklog-scan` / `worklog-weekly` / `worklog-export`
 
 Record and summarize worklog evidence from repeated scans. See "Worklog evidence" below for what these can and cannot prove.
+
+### `repoops checkpoint [PATH]` / `repoops resume [PATH]`
+
+Config-free, single-repository handoff generation and validation. `PATH` defaults
+to `.`; both commands discover the Git repository root from it. See "Quick start:
+checkpoint -> validate -> resume" above and `docs/CLI_CONTRACT.md`.
 
 ### `--fetch`
 
@@ -461,7 +556,10 @@ Notification output must avoid leaking secrets. It should never include file con
 
 * GitHub Actions inspection.
 * CI failure summarization.
-* Agent handoff Markdown generation.
+* Agent handoff Markdown generation. A minimal, config-free slice of this
+  (`repoops checkpoint`/`repoops resume`, deterministic facts only, no LLM) has
+  landed as P0 — see "Quick start: checkpoint -> validate -> resume" above.
+  GitHub Actions inspection and CI failure summarization are still not implemented.
 
 ### v4
 

@@ -4,6 +4,7 @@
 
 - **v1**: added `remote` (`RemoteSyncStatus`) and `attention_score` to the repo snapshot; added 5 remote-related risk flags. `schema_version` bumped from `repoops.snapshot.v0` to `repoops.snapshot.v1`.
 - **M0 worklog**: added a local SQLite evidence store (`repoops.worklog`) and derived candidate rows. This is additive — it does not change the JSON snapshot schema above.
+- **P0 handoff**: added `repoops.handoff` (`repoops checkpoint`/`repoops resume`) and its own `repoops.handoff.v1` schema (`.repoops/handoff.json`), fully independent of the `repoops.snapshot.v1` schema above. See "Handoff schema (`repoops.handoff.v1`)" below.
 
 ## Snapshot schema
 
@@ -143,6 +144,203 @@ Rules:
 3. Secret-like paths must be redacted.
 4. File contents are never read.
 5. `include_untracked` affects notable file listing, not raw counts.
+
+## Handoff schema (`repoops.handoff.v1`)
+
+`repoops checkpoint` writes `.repoops/handoff.json` (this schema) and
+`.repoops/HANDOFF.md` (a rendering of it) at the repository root. This schema is
+independent of `repoops.snapshot.v1` above — single-repo, not multi-repo, and
+covers a different set of facts (diff stats, recent commits, an editable
+semantic/next-action section).
+
+```json
+{
+  "schema_version": "repoops.handoff.v1",
+  "created_at": "2026-08-01T09:00:00-04:00",
+  "repository": {
+    "name": "repoops-handoff",
+    "root": "/home/fabian/repoops-handoff",
+    "branch": "main",
+    "detached_head": false,
+    "head_short": "a1b2c3d",
+    "head_full": "a1b2c3d4e5f6...",
+    "upstream": "origin/main",
+    "ahead": 0,
+    "behind": 0,
+    "dirty": true,
+    "remote_identity": "github.com/fbientrigo/repoops-handoff"
+  },
+  "changes": {
+    "counts": {
+      "modified": 1,
+      "staged": 0,
+      "untracked": 1,
+      "deleted": 0,
+      "renamed": 0,
+      "conflicted": 0
+    },
+    "notable_paths": ["src/repoops/handoff.py"],
+    "diff_stat": " src/repoops/handoff.py | 4 ++--\n 1 file changed, 2 insertions(+), 2 deletions(-)",
+    "cached_diff_stat": ""
+  },
+  "recent_commits": [
+    { "short_hash": "a1b2c3d", "date": "2026-08-01T08:55:00-04:00", "subject": "wip" }
+  ],
+  "semantic": {
+    "goal": "TODO: describe the current goal",
+    "current_scope": "TODO: describe what is in scope for this session",
+    "out_of_scope": [],
+    "completed": [],
+    "decisions": [],
+    "failed_attempts": [],
+    "verification_passed": [],
+    "verification_pending": []
+  },
+  "next_action": {
+    "task": "TODO: define the single next concrete task",
+    "command": null,
+    "success_condition": "TODO: define one concrete, checkable success condition",
+    "blocker": null
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `schema_version` | string | Must equal `repoops.handoff.v1`. Any other value (or a missing key) is treated by `repoops resume` as an unsupported schema version — a distinct `BLOCKING` condition from a generic validation failure. |
+| `created_at` | string | ISO-8601 with local timezone if available. |
+| `repository` | object | See below. |
+| `changes` | object | See below. |
+| `recent_commits` | array | Up to 5 most recent commits (`git log -5`), each `{short_hash, date, subject}`. Bounded by a fixed limit, not configurable in P0. |
+| `semantic` | object | Human/agent-editable. `repoops` never infers this content. By default, `checkpoint` preserves the existing `semantic` section from a prior, same-repository checkpoint across repeated runs; only `checkpoint --reset-semantic` (or a first-ever checkpoint) replaces it with `TODO:` placeholders. See "Semantic preservation" below. |
+| `next_action` | object | Human/agent-editable, same preservation/reset rule as `semantic`. |
+
+### `repository`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Repository directory name (`root`'s basename). |
+| `root` | string | Absolute path, resolved via `git rev-parse --show-toplevel`. |
+| `branch` | string/null | Current branch name, or `null` when `detached_head` is `true`. |
+| `detached_head` | bool | Whether HEAD is detached. |
+| `head_short` / `head_full` | string | Short and full commit hashes. |
+| `upstream` | string/null | e.g. `origin/main`, or `null` when no upstream is configured. |
+| `ahead` / `behind` | int/null | Computed from local refs only (`git rev-list --count`) — `repoops checkpoint`/`resume` never run `git fetch`, so these can be stale relative to the actual remote. `null` when there is no upstream. |
+| `dirty` | bool | Whether porcelain status has entries (excluding `.repoops/` itself — see below). |
+| `remote_identity` | string/null | Normalized `host/owner/repo`-shaped identity derived from `git config --get remote.origin.url` (see "Repository relocation" below). `null` when no origin remote is configured or it could not be parsed. Never the raw remote URL — credentials, tokens, and query strings are never stored. |
+
+### Semantic preservation
+
+By default, `repoops checkpoint` treats `semantic` and `next_action` as durable
+state, not derived facts: if `.repoops/handoff.json` already exists, is valid, and
+can be identified as belonging to the current repository (see "Repository
+relocation"), its `semantic` and `next_action` are copied into the new checkpoint
+unchanged, while every other field is recomputed fresh. This is what makes the
+`checkpoint` → edit `handoff.json` → `checkpoint` → `resume` workflow safe to run
+repeatedly without losing recorded context.
+
+`repoops checkpoint --reset-semantic` bypasses preservation unconditionally and
+writes fresh `TODO:` placeholders, regardless of what existed before — including
+an existing file that was invalid or unsafe to preserve from. This is the only
+way `semantic`/`next_action` are intentionally discarded.
+
+If `.repoops/handoff.json` exists but is invalid JSON, has an unsupported
+`schema_version`, fails schema validation, or belongs to a different repository,
+`checkpoint` (without `--reset-semantic`) fails with a non-zero exit code and
+leaves both `handoff.json` and `HANDOFF.md` unchanged — it never overwrites
+unrecognized or suspicious prior state with placeholders.
+
+### Repository relocation
+
+`repository.root` is an absolute path, which is not stable across clones,
+machines, or containers. `remote_identity` provides an additional, independent
+signal of "is this the same repository": it normalizes `remote.origin.url` so
+that equivalent SSH and HTTPS forms of the same remote compare equal, for example
+all of
+
+```text
+git@github.com:owner/repo.git
+https://github.com/owner/repo.git
+ssh://git@github.com/owner/repo.git
+```
+
+normalize to the identity `github.com/owner/repo`. Normalization drops the
+scheme, any embedded username/password/token, the `.git` suffix, trailing
+slashes, and query strings/fragments — none of that is ever written to
+`handoff.json`, `HANDOFF.md`, or printed by `repoops resume`.
+
+`repository.root` is still recorded as contextual evidence, but a root mismatch
+alone is no longer automatically `BLOCKING` — see the drift table below.
+
+### `changes`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `counts` | object | Same shape as the snapshot schema's `counts` (`staged`, `modified`, `untracked`, `deleted`, `renamed`, `conflicted`). |
+| `notable_paths` | array[string] | Redacted, relative changed paths, capped at 30. |
+| `diff_stat` | string | Output of `git diff --stat` — filenames and line-change counts only, never full diffs or file contents. Secret-like filenames are redacted the same way as `notable_paths`. |
+| `cached_diff_stat` | string | Output of `git diff --cached --stat`, same redaction. |
+
+**`.repoops/` is excluded from all of the above.** Writing a checkpoint creates
+`.repoops/handoff.json` and `.repoops/HANDOFF.md`, which would otherwise appear
+as a new untracked entry on the very next scan. Since that is a side effect of
+running the tool, not of the tracked work, `repoops.handoff` filters `.repoops/`
+paths out of `git status`/`git diff --stat` output before computing counts,
+`dirty`, `notable_paths`, and the diff-stat strings.
+
+### Handoff-specific allowed Git commands
+
+`repoops checkpoint`/`repoops resume` reuse `git_scan.py`'s `_run_git` whitelist
+enforcement (see `docs/SAFETY_CONTRACT.md`) and add six read-only, metadata/stat-only
+commands on top of the existing v1 list:
+
+```text
+git rev-parse --show-toplevel
+git rev-parse HEAD
+git diff --stat
+git diff --cached --stat
+git log -5 --pretty=format:%h<US>%ad<US>%s --date=iso-strict
+git config --get remote.origin.url
+```
+
+`git config --get remote.origin.url` is local-config-only — it never touches the
+network — and is used solely to derive `remote_identity` (see "Repository
+relocation" above).
+
+(`<US>` is the ASCII unit-separator `\x1f`, used as a field delimiter so commit
+subjects containing arbitrary characters parse unambiguously.) Ahead/behind and
+upstream reuse the existing `@{u}`-based commands already whitelisted for
+`repoops scan`/`repoops run`. `repoops checkpoint`/`repoops resume` never call
+`git fetch` — ahead/behind are always computed from local refs only.
+
+### Resume drift severities
+
+`repoops resume` compares the recorded `repository`/`changes` against a fresh
+collection of the same facts and reports each difference as a `DriftItem` with a
+severity:
+
+| Drift | Severity |
+| --- | --- |
+| No checkpoint found at `.repoops/handoff.json` | `BLOCKING` |
+| `handoff.json` is not valid JSON | `BLOCKING` |
+| `schema_version` does not equal `repoops.handoff.v1` | `BLOCKING` |
+| `handoff.json` is valid JSON but fails schema validation | `BLOCKING` |
+| Same `repository.root` | no relocation drift |
+| Different `repository.root`, same normalized `remote_identity` (both non-empty) | `WARNING` (`repository_relocated`) — a legitimate relocation, not blocking by itself |
+| Different `repository.root`, different normalized `remote_identity` (both non-empty) | `BLOCKING` — likely another repository |
+| Different `repository.root`, `remote_identity` unavailable on either side | `BLOCKING` — no stable evidence it's the same repository |
+| `remote_identity` changed at the same `repository.root`, both non-empty and different | `BLOCKING` |
+| `remote_identity` changed at the same `repository.root`, one side empty/unknown | `WARNING` |
+| `repository.branch` changed | `BLOCKING` |
+| `repository.detached_head` changed | `WARNING` |
+| `repository.head_full` changed (HEAD moved) | `WARNING` |
+| `repository.dirty` or any `changes.counts` field changed | `WARNING` |
+| Nothing changed | `NONE` |
+
+The overall severity is the highest severity among all detected drift items
+(`BLOCKING` > `WARNING` > `NONE`). `repoops resume` exits `1` when the overall
+severity is `BLOCKING`, `0` otherwise. It never asserts that continuing from the
+recorded checkpoint is safe when the overall severity is `WARNING` or `BLOCKING`.
 
 ## Worklog evidence store
 

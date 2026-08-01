@@ -85,9 +85,7 @@ def test_notify_does_not_log_secret_env_values(
     assert "REPOOPS_TELEGRAM_BOT_TOKEN" not in result.model_dump_json()
 
 
-def test_notify_telegram_sends_synthesis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_notify_telegram_sends_synthesis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     report = tmp_path / "report.md"
     report.write_text(
         "# repoops report\n\n"

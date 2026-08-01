@@ -118,9 +118,7 @@ def test_untracked_can_be_excluded_from_notable_files(clean_git_repo: Path) -> N
 def test_risk_flags_many_changes() -> None:
     summary = PorcelainSummary()
     for index in range(21):
-        summary.entries.append(
-            parse_porcelain_status(f" M file_{index}.py\n").entries[0]
-        )
+        summary.entries.append(parse_porcelain_status(f" M file_{index}.py\n").entries[0])
 
     flags = classify_risk_flags(
         exists=True,
