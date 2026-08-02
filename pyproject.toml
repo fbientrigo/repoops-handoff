@@ -5,12 +5,34 @@ build-backend = "hatchling.build"
 [project]
 name = "repoops-handoff"
 version = "0.1.0"
-description = "Low-noise multi-repository status reporter and future agent handoff generator."
+description = "Low-noise multi-repository status and coding-agent handoff CLI."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-  { name = "repoops contributors" }
+  { name = "fabian", email = "42480199+fbientrigo@users.noreply.github.com" }
+]
+keywords = [
+  "git",
+  "multi-repository",
+  "status",
+  "handoff",
+  "agent",
+  "worklog",
+  "cli",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Topic :: Utilities",
 ]
 dependencies = [
   "typer>=0.12",
@@ -19,10 +41,18 @@ dependencies = [
   "PyYAML>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/fbientrigo/repoops-handoff"
+Repository = "https://github.com/fbientrigo/repoops-handoff"
+Issues = "https://github.com/fbientrigo/repoops-handoff/issues"
+Changelog = "https://github.com/fbientrigo/repoops-handoff/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = [
+  "build>=1.2.1",
   "pytest>=8.2",
   "ruff>=0.5",
+  "twine>=5.1.1",
 ]
 
 [project.scripts]
@@ -57,3 +87,4 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+

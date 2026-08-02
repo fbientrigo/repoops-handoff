@@ -161,3 +161,113 @@ def test_config_overrides_remote_and_fetch_settings(tmp_path: Path) -> None:
     assert cfg.defaults.remote_check is False
     assert cfg.defaults.fetch is True
     assert cfg.defaults.fetch_timeout_seconds == 5
+
+
+def test_repo_config_tags_validation_and_deduplication(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: dev
+        repos:
+          - name: ship-repo
+            path: ~/ship
+            project: thesis
+            tags:
+              - thesis
+              -  ship 
+              - THESIS
+              - ml
+        """,
+    )
+
+    cfg = load_config(config_path)
+    assert cfg.repos[0].tags == ["thesis", "ship", "ml"]
+
+
+def test_repo_config_rejects_empty_tags(tmp_path: Path) -> None:
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: dev
+        repos:
+          - name: ship-repo
+            path: ~/ship
+            tags:
+              - "   "
+        """,
+    )
+
+    with pytest.raises(ValueError, match="Tag cannot be empty"):
+        load_config(config_path)
+
+
+def test_resolve_config_path_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from repoops.config import DEFAULT_CONFIG_PATH, resolve_config_path
+
+    # 1. Explicit path parameter has highest precedence
+    explicit = tmp_path / "explicit.yaml"
+    monkeypatch.setenv("REPOOPS_CONFIG", str(tmp_path / "env.yaml"))
+    assert resolve_config_path(explicit) == explicit.resolve(strict=False)
+
+    # 2. REPOOPS_CONFIG env var has second precedence
+    assert resolve_config_path(None) == (tmp_path / "env.yaml").resolve(strict=False)
+
+    # 3. Default path when neither explicit nor env var is provided
+    monkeypatch.delenv("REPOOPS_CONFIG", raising=False)
+    assert resolve_config_path(None) == DEFAULT_CONFIG_PATH
+
+
+def test_filter_config_project_and_tags(tmp_path: Path) -> None:
+    from repoops.config import FilterNoMatchError, filter_config
+
+    config_path = write_config(
+        tmp_path / "repos.yaml",
+        """
+        machine:
+          name: dev
+        repos:
+          - name: r1
+            path: ~/r1
+            project: thesis
+            tags: [thesis, ship, ml]
+          - name: r2
+            path: ~/r2
+            project: thesis
+            tags: [thesis, sampling]
+          - name: r3
+            path: ~/r3
+            project: apolo
+            tags: [apolo, rag]
+        """,
+    )
+
+    cfg = load_config(config_path)
+
+    # Filter by project (case insensitive)
+    f_proj = filter_config(cfg, project="THESIS")
+    assert [r.name for r in f_proj.repos] == ["r1", "r2"]
+
+    # Filter by single tag
+    f_tag = filter_config(cfg, tags=["SHIP"])
+    assert [r.name for r in f_tag.repos] == ["r1"]
+
+    # Filter by repeated tags (AND logic)
+    f_and = filter_config(cfg, tags=["thesis", "ship"])
+    assert [r.name for r in f_and.repos] == ["r1"]
+
+    # Filter by project AND tags
+    f_comb = filter_config(cfg, project="thesis", tags=["sampling"])
+    assert [r.name for r in f_comb.repos] == ["r2"]
+
+    # Order preservation
+    assert [r.name for r in f_proj.repos] == ["r1", "r2"]
+
+    # No match raises FilterNoMatchError with known projects and tags
+    with pytest.raises(FilterNoMatchError) as exc_info:
+        filter_config(cfg, project="nonexistent")
+    err_text = str(exc_info.value)
+    assert "No repositories matched requested filters" in err_text
+    assert "Known projects: apolo, thesis" in err_text
+    assert "Known tags: apolo, ml, rag, sampling, ship, thesis" in err_text

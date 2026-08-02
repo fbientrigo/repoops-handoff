@@ -7,6 +7,7 @@ defaults:
   include_clean_repos: false
   report_dir: ~/.local/share/repoops/reports
   snapshot_dir: ~/.local/share/repoops/snapshots
+  worklog_db: ~/.local/share/repoops/worklog.db
 
 notifications:
   enabled: false
@@ -15,6 +16,24 @@ notifications:
 repos:
   - name: dihiggs
     path: ~/dihiggs
+    project: DiHiggs
+    tags:
+      - physics
+      - ml
 
   - name: aws-climate
     path: ~/aws
+
+  - name: apolo-rag
+    path: ~/apolo_rag
+    project: Apolo
+    tags:
+      - apolo
+      - rag
+
+  - name: charge-monitoring
+    path: ~/charge_monitoring_system
+    project: ChargeMonitoringSystem
+    tags:
+      - charge-monitoring
+      - embedded
