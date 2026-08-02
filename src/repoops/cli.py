@@ -1,10 +1,11 @@
 """Typer CLI for repoops."""
 
+import importlib.metadata
 from pathlib import Path
 
 import typer
 
-from repoops.config import load_config
+from repoops.config import ConfigError, filter_config, load_config
 from repoops.git_scan import build_snapshot
 from repoops.handoff import HandoffError, create_checkpoint, handoff_paths, run_resume
 from repoops.handoff_render import render_resume_report
@@ -20,7 +21,7 @@ from repoops.worklog import (
     write_candidates_csv,
 )
 
-app = typer.Typer(help="Low-noise multi-repository status reporter.")
+app = typer.Typer(help="Low-noise multi-repository status and coding-agent handoff CLI.")
 
 
 FETCH_OPTION_HELP = (
@@ -28,25 +29,70 @@ FETCH_OPTION_HELP = (
     "Updates remote-tracking refs only — never the working tree, never pulls or pushes."
 )
 
+CONFIG_OPTION = typer.Option(None, "--config", "-c", help="Path to repoops YAML config.")
+PROJECT_OPTION = typer.Option(None, "--project", help="Filter repositories by project name.")
+TAG_OPTION = typer.Option(None, "--tag", help="Filter repositories by tag (repeatable).")
+
+
+def version_callback(value: bool) -> None:
+    if value:
+        try:
+            ver = importlib.metadata.version("repoops-handoff")
+        except importlib.metadata.PackageNotFoundError:
+            ver = "0.1.0"
+        typer.echo(f"repoops {ver}")
+        raise typer.Exit()
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        None,
+        "--version",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Low-noise multi-repository status reporter."""
+    pass
+
 
 @app.command()
 def scan(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    config: Path | None = CONFIG_OPTION,
+    project: str | None = PROJECT_OPTION,
+    tag: list[str] | None = TAG_OPTION,
     fetch: bool = typer.Option(False, "--fetch", help=FETCH_OPTION_HELP),
 ) -> None:
     """Scan configured repositories and print a terminal table."""
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+        cfg = filter_config(cfg, project=project, tags=tag)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     snapshot = build_snapshot(cfg, cli_fetch=fetch)
     print_summary_table(snapshot)
 
 
 @app.command()
 def run(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    config: Path | None = CONFIG_OPTION,
+    project: str | None = PROJECT_OPTION,
+    tag: list[str] | None = TAG_OPTION,
     fetch: bool = typer.Option(False, "--fetch", help=FETCH_OPTION_HELP),
 ) -> None:
     """Scan configured repositories and write JSON + Markdown artifacts."""
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+        cfg = filter_config(cfg, project=project, tags=tag)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     snapshot = build_snapshot(cfg, cli_fetch=fetch)
     print_summary_table(snapshot)
 
@@ -73,11 +119,16 @@ def run(
 
 @app.command(name="notify")
 def notify_cmd(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    config: Path | None = CONFIG_OPTION,
     report: Path = typer.Option(..., "--report", "-r", help="Path to an existing Markdown report."),
 ) -> None:
     """Send or no-op an existing report according to config."""
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     result = notify_report(cfg, report)
     typer.echo(f"Notification: {result.status} ({result.reason or result.channel})")
 
@@ -134,10 +185,18 @@ def resume(
 
 @app.command(name="worklog-scan")
 def worklog_scan(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
+    config: Path | None = CONFIG_OPTION,
+    project: str | None = PROJECT_OPTION,
+    tag: list[str] | None = TAG_OPTION,
 ) -> None:
     """Scan configured repositories (read-only) and record a worklog evidence snapshot."""
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+        cfg = filter_config(cfg, project=project, tags=tag)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     snapshot = build_snapshot(cfg)
     conn = open_store(cfg.defaults.worklog_db)
     rows = record_snapshot(conn, cfg, snapshot)
@@ -147,11 +206,16 @@ def worklog_scan(
 
 @app.command(name="worklog-weekly")
 def worklog_weekly(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
     week: str = typer.Option(..., "--week", help="ISO week, e.g. 2026-W28."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to repoops YAML config."),
 ) -> None:
     """Print worklog candidate rows for a week. These are evidence, not approved hours."""
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     start, end = iso_week_range(week)
     conn = open_store(cfg.defaults.worklog_db)
     candidates = compute_candidates(conn, start, end)
@@ -161,15 +225,20 @@ def worklog_weekly(
 
 @app.command(name="worklog-export")
 def worklog_export(
-    config: Path = typer.Option(..., "--config", "-c", help="Path to repoops YAML config."),
     month: str = typer.Option(..., "--month", help="Month, e.g. 2026-06."),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to repoops YAML config."),
     export_format: str = typer.Option("csv", "--format", help="Only 'csv' is supported."),
 ) -> None:
     """Export worklog candidate rows for a month as CSV. Not a final payroll report."""
     if export_format != "csv":
         raise typer.BadParameter("Only --format csv is supported.")
 
-    cfg = load_config(config)
+    try:
+        cfg = load_config(config)
+    except (ConfigError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     start, end = month_range(month)
     conn = open_store(cfg.defaults.worklog_db)
     candidates = compute_candidates(conn, start, end)
