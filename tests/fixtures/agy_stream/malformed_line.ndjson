@@ -1,0 +1,3 @@
+{"event": "init", "conversation_id": "sess_bad1", "init": {"model": "gemini-2.5-flash", "cwd": "/workspace/repo", "tools": ["write_to_file", "finish"], "permission_mode": "always-proceed"}}
+{"event": "step_update", "step_update": {"conversation_id": "sess_bad1", "step_index": 0, "state": "DONE"
+{"event": "result", "result": {"conversation_id": "sess_bad1", "status": "SUCCESS", "response": "{\"status\":\"success\",\"summary\":\"Done despite one malformed event.\"}", "duration_seconds": 2.0, "num_turns": 1, "structured_output": {"status": "success", "summary": "Done despite one malformed event."}, "usage": {"input_tokens": 400, "output_tokens": 90, "thinking_tokens": 10, "cache_read_tokens": 0, "total_tokens": 500}}}
