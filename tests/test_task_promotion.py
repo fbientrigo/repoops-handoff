@@ -136,7 +136,7 @@ def test_3_4_task_001_verified_promoted_commit_created_and_head_advances(tmp_pat
         priority=10,
         objective="Create base file",
         allowed_paths=["base.txt"],
-        acceptance=[f'{sys.executable} -c "import os; assert os.path.exists(\\\"base.txt\\\")"'],
+        acceptance=[f'{sys.executable} -c "import os; assert os.path.exists(\\"base.txt\\")"'],
     )
     save_task(repo_root, t1)
 
@@ -180,7 +180,7 @@ def test_5_6_task_002_baseline_equals_promoted_task_001_and_sees_changes(tmp_pat
         priority=10,
         objective="Create base file",
         allowed_paths=["base.txt"],
-        acceptance=[f'{sys.executable} -c "import os; assert os.path.exists(\\\"base.txt\\\")"'],
+        acceptance=[f'{sys.executable} -c "import os; assert os.path.exists(\\"base.txt\\")"'],
     )
     save_task(repo_root, t1)
     stub1 = AgentRunResult(
@@ -210,7 +210,7 @@ def test_5_6_task_002_baseline_equals_promoted_task_001_and_sees_changes(tmp_pat
         allowed_paths=["derived.txt"],
         acceptance=[
             f'{sys.executable} -c "import os; '
-            f'assert os.path.exists(\\\"base.txt\\\") and os.path.exists(\\\"derived.txt\\\")"'
+            f'assert os.path.exists(\\"base.txt\\") and os.path.exists(\\"derived.txt\\")"'
         ],
     )
     save_task(repo_root, t2)
@@ -246,7 +246,7 @@ def test_7_agent_cannot_control_commit_message(tmp_path):
         status="ready",
         objective="Test commit msg",
         allowed_paths=["file.txt"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t1)
     stub = AgentRunResult(
@@ -410,7 +410,7 @@ def test_14_attempt_count_increments_once_per_execution_attempt(tmp_path):
         priority=10,
         objective="Attempt test",
         allowed_paths=["attempt.txt"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t1)
     stub = AgentRunResult(

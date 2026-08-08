@@ -125,4 +125,3 @@ acceptance:
     assert "Workspace policy status: passed" in result.output
     assert "Acceptance status: passed" in result.output
     assert "RepoOps Verdict: verified" in result.output
-

@@ -263,9 +263,7 @@ def agent_run(
 
     try:
         runner = select_runner(provider)
-        result = run_verified_task(
-            runner, contract, repo_root, config=AgentRunConfig(model=model)
-        )
+        result = run_verified_task(runner, contract, repo_root, config=AgentRunConfig(model=model))
     except (AgyNotFoundError, AgyVersionError, AgyError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -292,7 +290,6 @@ def agent_run(
 
     if result.verdict not in ("verified", "unverified"):
         raise typer.Exit(code=1)
-
 
 
 @app.command(name="worklog-scan")
@@ -364,9 +361,7 @@ def worklog_export(
 
 @app.command(name="task-list")
 def task_list(
-    repo: Path = typer.Argument(
-        Path("."), help="Path inside the local Git repository."
-    ),
+    repo: Path = typer.Argument(Path("."), help="Path inside the local Git repository."),
 ) -> None:
     """List tasks in the repository backlog (.repoops/tasks/)."""
     try:
@@ -386,18 +381,13 @@ def task_list(
     for task in backlog:
         deps_str = ",".join(task.depends_on) if task.depends_on else "-"
         obj_snippet = task.objective.strip().replace("\n", " ")[:30]
-        line = (
-            f"{task.id:<15} {task.status:<10} {task.priority:<5} "
-            f"{deps_str:<15} {obj_snippet}"
-        )
+        line = f"{task.id:<15} {task.status:<10} {task.priority:<5} {deps_str:<15} {obj_snippet}"
         typer.echo(line)
 
 
 @app.command(name="task-next")
 def task_next(
-    repo: Path = typer.Argument(
-        Path("."), help="Path inside the local Git repository."
-    ),
+    repo: Path = typer.Argument(Path("."), help="Path inside the local Git repository."),
 ) -> None:
     """Show the next eligible task from the repository backlog."""
     try:
@@ -420,9 +410,7 @@ def task_next(
 
 @app.command(name="task-status")
 def task_status(
-    repo: Path = typer.Argument(
-        Path("."), help="Path inside the local Git repository."
-    ),
+    repo: Path = typer.Argument(Path("."), help="Path inside the local Git repository."),
 ) -> None:
     """Show RepoOps integration branch status and backlog promotion details."""
     try:
@@ -451,9 +439,7 @@ def task_status(
 
 @app.command(name="task-run-next")
 def task_run_next(
-    repo: Path = typer.Argument(
-        Path("."), help="Path inside the local Git repository."
-    ),
+    repo: Path = typer.Argument(Path("."), help="Path inside the local Git repository."),
     provider: str = typer.Option(
         "antigravity", "--provider", help="Agent provider to use. Only 'antigravity' is supported."
     ),
@@ -510,9 +496,7 @@ def task_run_next(
 
 @app.command(name="scheduler-run-once")
 def scheduler_run_once_cmd(
-    repo: Path = typer.Argument(
-        Path("."), help="Path inside the local Git repository."
-    ),
+    repo: Path = typer.Argument(Path("."), help="Path inside the local Git repository."),
     provider: str = typer.Option(
         "antigravity", "--provider", help="Agent provider to use. Only 'antigravity' is supported."
     ),

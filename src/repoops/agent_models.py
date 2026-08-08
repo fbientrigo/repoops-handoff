@@ -159,4 +159,3 @@ class AgentRunResult(BaseModel):
     acceptance_status: str = "skipped"  # "passed" | "failed" | "skipped"
     acceptance_results: list[AcceptanceResult] = Field(default_factory=list)
     verdict: str = "unverified"  # "verified" | "failed" | "policy_violation" | "unverified"
-

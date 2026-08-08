@@ -188,7 +188,7 @@ def test_9_10_ready_running_verified_and_failed(tmp_path):
         status="ready",
         priority=10,
         objective="Verify task",
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t1)
 
@@ -251,7 +251,7 @@ def test_11_run_id_persisted_on_task(tmp_path):
         id="task-run-persisted",
         status="ready",
         objective="Check run id",
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t)
 
@@ -314,7 +314,7 @@ def test_14_primary_working_tree_remains_untouched(tmp_path):
         id="task-untouched-primary",
         status="ready",
         objective="Mutate worktree",
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t)
 
@@ -360,9 +360,7 @@ def test_14_primary_working_tree_remains_untouched(tmp_path):
         capture_output=True,
         text=True,
     )
-    code_changes = [
-        line for line in proc_stat.stdout.splitlines() if "worktree_file.txt" in line
-    ]
+    code_changes = [line for line in proc_stat.stdout.splitlines() if "worktree_file.txt" in line]
     assert len(code_changes) == 0
 
 
@@ -376,7 +374,7 @@ def test_15_required_changes_missing_failed_not_policy_violation(tmp_path):
         status="ready",
         objective="Required changes missing",
         expected_changes=ExpectedChanges(required=True),
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
     save_task(repo_root, t)
 
