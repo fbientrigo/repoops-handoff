@@ -15,6 +15,7 @@ from repoops.agent_models import (
 )
 from repoops.agent_runner import AgentRunner
 from repoops.agent_verification import run_verified_task
+from repoops.progress import ProgressCallback
 
 
 class MockRunner(AgentRunner):
@@ -24,7 +25,14 @@ class MockRunner(AgentRunner):
         self.stub_result = stub_result
         self.last_prompt: str | None = None
 
-    def run(self, *, task: str, repo: Path, config: AgentRunConfig) -> AgentRunResult:
+    def run(
+        self,
+        *,
+        task: str,
+        repo: Path,
+        config: AgentRunConfig,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentRunResult:
         self.last_prompt = task
         # Make a copy of stub_result for persistence simulation
         run_dir = repo / ".repoops" / "agent-runs" / self.stub_result.run_id
@@ -56,7 +64,7 @@ def test_verified_success(tmp_path):
         objective="Modify main.py",
         expected_changes=ExpectedChanges(required=True),
         allowed_paths=["src/"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -86,7 +94,7 @@ def test_required_change_with_zero_git_changes_fails(tmp_path):
         objective="Modify main.py",
         expected_changes=ExpectedChanges(required=True),
         allowed_paths=["src/"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -114,7 +122,7 @@ def test_agent_reports_success_but_zero_git_changes_not_verified(tmp_path):
         id="t_agent_claim",
         objective="Fix bug",
         expected_changes=ExpectedChanges(required=True),
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -140,7 +148,7 @@ def test_git_change_outside_allowed_paths_is_policy_violation(tmp_path):
         id="t_unallowed",
         objective="Fix bug",
         allowed_paths=["src/"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -182,7 +190,7 @@ def test_observable_tool_outside_repo_is_policy_violation(tmp_path):
         id="t_tool_leak",
         objective="Fix bug",
         allowed_paths=["src/"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -235,7 +243,7 @@ def test_agent_subprocess_failure_results_in_failed_verdict(tmp_path):
         id="t_proc_fail",
         objective="Fix bug",
         allowed_paths=["src/"],
-        acceptance=[f'{sys.executable} -c "print(\\\"ok\\\")"'],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
     )
 
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
@@ -268,3 +276,128 @@ def test_unverified_verdict_when_no_acceptance_commands(tmp_path):
     result = run_verified_task(runner, contract, tmp_path, AgentRunConfig(model="model"))
     assert result.verdict == "unverified"
     assert result.acceptance_status == "skipped"
+
+
+def test_progress_logging_run_verified_task(tmp_path: Path) -> None:
+    stub = AgentRunResult(
+        run_id="run_progress_test",
+        provider="antigravity",
+        requested_model="model",
+        repository=str(tmp_path),
+        started_at="2026-08-07T00:00:00Z",
+        ended_at="2026-08-07T00:00:01Z",
+        exit_code=0,
+        process_status="completed",
+        process_exit_status="success",
+        git_evidence=GitEvidence(changed_files=["src/main.py"]),
+    )
+    runner = MockRunner(stub)
+    contract = TaskContract(
+        id="t_progress",
+        objective="Fix bug",
+        allowed_paths=["src/"],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
+    )
+
+    logged: list[tuple[str, str]] = []
+    result = run_verified_task(
+        runner,
+        contract,
+        tmp_path,
+        AgentRunConfig(model="model"),
+        on_progress=lambda s, m: logged.append((s, m)),
+    )
+    assert result.verdict == "verified"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "verify: git changes detected: 1 file" in combined
+    assert "verify: acceptance 1/1 started" in combined
+    assert "verify: acceptance 1/1 PASS" in combined
+    assert "verdict: verified" in combined
+
+
+class LegacyRunnerWithoutOnProgress(AgentRunner):
+    provider = "legacy"
+
+    def __init__(self, stub_result: AgentRunResult) -> None:
+        self.stub_result = stub_result
+
+    def run(self, *, task: str, repo: Path, config: AgentRunConfig) -> AgentRunResult:
+        run_dir = repo / ".repoops" / "agent-runs" / self.stub_result.run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self.stub_result.run_dir = str(run_dir)
+        (run_dir / "run.json").write_text(self.stub_result.model_dump_json(), encoding="utf-8")
+        return self.stub_result
+
+
+def test_legacy_runner_without_on_progress_kwarg_compatible(tmp_path: Path) -> None:
+    stub = AgentRunResult(
+        run_id="run_legacy_test",
+        provider="legacy",
+        requested_model="model",
+        repository=str(tmp_path),
+        started_at="2026-08-07T00:00:00Z",
+        ended_at="2026-08-07T00:00:01Z",
+        exit_code=0,
+        process_status="completed",
+        process_exit_status="success",
+        git_evidence=GitEvidence(changed_files=["src/main.py"]),
+    )
+    runner = LegacyRunnerWithoutOnProgress(stub)
+    contract = TaskContract(
+        id="t_legacy",
+        objective="Fix bug",
+        allowed_paths=["src/"],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
+    )
+
+    logged: list[tuple[str, str]] = []
+    # Should not raise TypeError when on_progress is passed to run_verified_task
+    result = run_verified_task(
+        runner,
+        contract,
+        tmp_path,
+        AgentRunConfig(model="model"),
+        on_progress=lambda s, m: logged.append((s, m)),
+    )
+    assert result.verdict == "verified"
+
+
+def test_progress_logging_policy_violation_and_expected_changes(tmp_path: Path) -> None:
+    stub = AgentRunResult(
+        run_id="run_policy_vio",
+        provider="antigravity",
+        requested_model="model",
+        repository=str(tmp_path),
+        started_at="2026-08-07T00:00:00Z",
+        ended_at="2026-08-07T00:00:01Z",
+        exit_code=0,
+        process_status="completed",
+        process_exit_status="success",
+        git_evidence=GitEvidence(changed_files=["other/forbidden.py"]),
+    )
+    runner = MockRunner(stub)
+    contract = TaskContract(
+        id="t_vio",
+        objective="Allowed in src only",
+        allowed_paths=["src/"],
+        acceptance=[f'{sys.executable} -c "print(\\"ok\\")"'],
+    )
+
+    logged: list[tuple[str, str]] = []
+    result = run_verified_task(
+        runner,
+        contract,
+        tmp_path,
+        AgentRunConfig(model="model"),
+        on_progress=lambda s, m: logged.append((s, m)),
+    )
+    assert result.verdict == "policy_violation"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "verify: git changes detected: 1 file" in combined
+    assert (
+        "verify: policy violation: Git change in 'other/forbidden.py' "
+        "is outside allowed_paths ['src/']" in combined
+    )
+    assert "verdict: policy_violation" in combined

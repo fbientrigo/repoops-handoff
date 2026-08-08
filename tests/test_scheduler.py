@@ -16,6 +16,7 @@ from repoops.agent_models import (
     GitEvidence,
 )
 from repoops.agent_runner import AgentRunner, AntigravityRunner
+from repoops.progress import ProgressCallback, format_progress_line
 from repoops.scheduler import run_scheduler_once
 from repoops.task_backlog import (
     SchedulerLock,
@@ -66,7 +67,16 @@ class MockSchedulerRunner(AgentRunner):
         self.created_file = created_file
         self.run_count = 0
 
-    def run(self, *, task: str, repo: Path, config: AgentRunConfig) -> AgentRunResult:
+    def run(
+        self,
+        *,
+        task: str,
+        repo: Path,
+        config: AgentRunConfig,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentRunResult:
+        if on_progress:
+            on_progress("agent", f'started provider={self.provider} model="{config.model}"')
         self.run_count += 1
         run_id = f"mock-run-{self.run_count}"
 
@@ -83,6 +93,10 @@ class MockSchedulerRunner(AgentRunner):
             else None
         )
 
+        exit_code = 0 if self.process_exit_status == "success" else 1
+        if on_progress:
+            on_progress("agent", f"completed exit={exit_code}")
+
         res = AgentRunResult(
             run_id=run_id,
             provider=self.provider,
@@ -92,7 +106,7 @@ class MockSchedulerRunner(AgentRunner):
             repository=str(repo),
             started_at="2026-08-07T00:00:00Z",
             ended_at="2026-08-07T00:00:01Z",
-            exit_code=0 if self.process_exit_status == "success" else 1,
+            exit_code=exit_code,
             process_status="completed",
             process_exit_status=self.process_exit_status,
             agent_report=agent_report,
@@ -141,7 +155,7 @@ def test_one_eligible_task_executes_exactly_once(
         id="task-001",
         objective="Do task 1",
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     save_task(repo, t1)
 
@@ -169,14 +183,14 @@ def test_two_eligible_tasks_executes_highest_priority(
         objective="Low priority",
         priority=50,
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     t2 = TaskItem(
         id="task-high",
         objective="High priority",
         priority=10,
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     save_task(repo, t1)
     save_task(repo, t2)
@@ -209,7 +223,7 @@ def test_successful_task_returns_task_verified(
         id="task-001",
         objective="Task 1",
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     save_task(repo, t1)
 
@@ -249,9 +263,7 @@ def test_failed_task_stops_scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 # 6. policy violation -> scheduler stops
-def test_policy_violation_stops_scheduler(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_policy_violation_stops_scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -261,7 +273,7 @@ def test_policy_violation_stops_scheduler(
         objective="Task 1",
         status="ready",
         allowed_paths=["allowed.txt"],
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     save_task(repo, t1)
 
@@ -279,9 +291,7 @@ def test_policy_violation_stops_scheduler(
 
 
 # 7. unverified -> scheduler stops
-def test_unverified_task_stops_scheduler(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unverified_task_stops_scheduler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -324,9 +334,7 @@ def test_no_automatic_retry_occurs(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 # 9. max_attempts prevents re-execution even if status is ready
-def test_max_attempts_prevents_reexecution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_max_attempts_prevents_reexecution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     init_git_repo(repo)
@@ -460,7 +468,7 @@ def test_second_task_remains_untouched(tmp_path: Path, monkeypatch: pytest.Monke
         objective="First task",
         priority=10,
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     t2 = TaskItem(
         id="task-002",
@@ -468,7 +476,7 @@ def test_second_task_remains_untouched(tmp_path: Path, monkeypatch: pytest.Monke
         priority=20,
         depends_on=["task-001"],
         status="ready",
-        acceptance=['python -c "print(\'ok\')"'],
+        acceptance=["python -c \"print('ok')\""],
     )
     save_task(repo, t1)
     save_task(repo, t2)
@@ -487,3 +495,250 @@ def test_second_task_remains_untouched(tmp_path: Path, monkeypatch: pytest.Monke
     assert task2_after.status == "ready"
     assert task2_after.attempt_count == 0
     assert task2_after.promotion_status == "not_applicable"
+
+
+# --- progress logging tests --------------------------------------------------------
+
+
+def test_progress_logging_successful_verified_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    t1 = TaskItem(
+        id="TASK-001",
+        objective="Task 1",
+        status="ready",
+        acceptance=["python -c \"print('ok')\""],
+    )
+    save_task(repo, t1)
+
+    mock_runner = MockSchedulerRunner(verdict="verified")
+    patch_runner(monkeypatch, mock_runner)
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="Gemini 3.5 Flash (Low)", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    assert res.outcome == "task_verified"
+    stages = [s for s, _ in logged]
+    assert "scheduler" in stages
+    assert "task" in stages
+    assert "git" in stages
+    assert "agent" in stages
+    assert "verify" in stages
+    assert "verdict" in stages
+    assert "promote" in stages
+
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "scheduler: run started" in combined
+    assert "task: selected TASK-001" in combined
+    assert "git: worktree ready" in combined
+    assert 'agent: started provider=antigravity model="Gemini 3.5 Flash (Low)"' in combined
+    assert "agent: completed exit=0" in combined
+    assert "verify: git changes detected: 1 file" in combined
+    assert "verify: acceptance 1/1 started: python -c \"print('ok')\"" in combined
+    assert "verify: acceptance 1/1 PASS" in combined
+    assert "verdict: verified" in combined
+    assert "promote: repoops/integration ->" in combined
+    assert "scheduler: completed outcome=task_verified" in combined
+
+
+def test_progress_logging_no_eligible_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    mock_runner = MockSchedulerRunner()
+    patch_runner(monkeypatch, mock_runner)
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="test-model", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    assert res.outcome == "no_eligible_task"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "scheduler: run started" in combined
+    assert "scheduler: no eligible task" in combined
+    assert "scheduler: completed outcome=no_eligible_task" in combined
+
+
+def test_progress_logging_failed_acceptance_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    t1 = TaskItem(
+        id="TASK-002",
+        objective="Task 2 with failing acceptance",
+        status="ready",
+        acceptance=['python -c "import sys; sys.exit(1)"'],
+    )
+    save_task(repo, t1)
+
+    mock_runner = MockSchedulerRunner(
+        process_exit_status="success",
+        verdict="failed",
+        mutates_worktree=True,
+    )
+    patch_runner(monkeypatch, mock_runner)
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="test-model", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    assert res.outcome == "task_failed"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "scheduler: run started" in combined
+    assert "task: selected TASK-002" in combined
+    assert "git: worktree ready" in combined
+    assert "agent: started" in combined
+    assert "agent: completed exit=0" in combined
+    assert "verify: git changes detected: 1 file" in combined
+    assert "verify: acceptance 1/1 started" in combined
+    assert "verify: acceptance 1/1 FAIL exit=1" in combined
+    assert "verdict: failed" in combined
+    assert "scheduler: completed outcome=task_failed" in combined
+
+
+def test_progress_logging_agent_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    t1 = TaskItem(
+        id="TASK-003",
+        objective="Task 3 agent failure",
+        status="ready",
+        acceptance=["python -c \"print('ok')\""],
+    )
+    save_task(repo, t1)
+
+    mock_runner = MockSchedulerRunner(
+        process_exit_status="failed",
+        verdict="failed",
+        mutates_worktree=False,
+    )
+    patch_runner(monkeypatch, mock_runner)
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="test-model", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    assert res.outcome == "task_failed"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "scheduler: run started" in combined
+    assert "task: selected TASK-003" in combined
+    assert "agent: started" in combined
+    assert "agent: completed exit=1" in combined
+    assert "verify: git changes detected: 0 files" in combined
+    assert "verdict: failed" in combined
+    assert "scheduler: completed outcome=task_failed" in combined
+
+
+def test_progress_logging_format_line() -> None:
+    from datetime import datetime
+
+    dt = datetime(2026, 8, 7, 15, 1, 14)
+    line = format_progress_line("scheduler", "run started", dt=dt)
+    assert line == "[15:01:14] scheduler  run started"
+
+    line2 = format_progress_line("task", "selected TASK-001", dt=dt)
+    assert line2 == "[15:01:14] task       selected TASK-001"
+
+    line3 = format_progress_line("git", "worktree ready", dt=dt)
+    assert line3 == "[15:01:14] git        worktree ready"
+
+
+def test_progress_logging_scheduler_lock_prevented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    # Acquire lock manually first
+    lock = SchedulerLock(repo)
+    lock.acquire()
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="test-model", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    lock.release()
+
+    assert res.outcome == "locked"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "scheduler: run started" in combined
+    assert "scheduler: lock prevented execution:" in combined
+    assert "scheduler: completed outcome=locked" in combined
+
+
+def test_progress_logging_task_promotion_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    t1 = TaskItem(
+        id="TASK-PROM-FAIL",
+        objective="Task that fails promotion",
+        status="ready",
+        acceptance=["python -c \"print('ok')\""],
+    )
+    save_task(repo, t1)
+
+    mock_runner = MockSchedulerRunner(verdict="verified")
+    patch_runner(monkeypatch, mock_runner)
+
+    # Mock promote_task to fail
+    def _mock_promote(*args, **kwargs):
+        return ("failed", None, "Simulated merge conflict during promotion")
+
+    monkeypatch.setattr("repoops.task_backlog.promote_task", _mock_promote)
+
+    logged: list[tuple[str, str]] = []
+    res = run_scheduler_once(
+        repo, model="test-model", on_progress=lambda s, m: logged.append((s, m))
+    )
+
+    assert res.outcome == "task_failed"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "promote: failed: Simulated merge conflict during promotion" in combined
+    assert "scheduler: completed outcome=task_failed" in combined
+
+
+def test_progress_logging_default_logger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_git_repo(repo)
+
+    # Calling run_scheduler_once without on_progress uses default log_progress to stdout
+    mock_runner = MockSchedulerRunner()
+    patch_runner(monkeypatch, mock_runner)
+
+    res = run_scheduler_once(repo, model="test-model")
+    assert res.outcome == "no_eligible_task"
+
+    captured = capsys.readouterr()
+    assert "scheduler  run started" in captured.out
+    assert "scheduler  no eligible task" in captured.out
+    assert "scheduler  completed outcome=no_eligible_task" in captured.out

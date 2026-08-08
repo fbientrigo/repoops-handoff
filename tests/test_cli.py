@@ -181,3 +181,25 @@ def test_cli_filtering_and_excluded_repos_not_scanned(tmp_path: Path, clean_git_
     assert "No repositories matched requested filters" in res_nomatch.output
     assert "Known projects: broken, thesis" in res_nomatch.output
     assert "Known tags: broken, ship, thesis" in res_nomatch.output
+
+
+def test_scheduler_run_once_cli_shows_progress_logging(
+    tmp_path: Path, clean_git_repo: Path
+) -> None:
+    # Running on a clean repo with no tasks shows progress and summary
+    res = runner.invoke(
+        app,
+        [
+            "scheduler-run-once",
+            str(clean_git_repo),
+            "--provider",
+            "antigravity",
+            "--model",
+            "Gemini 3.5 Flash (Low)",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    assert "scheduler  run started" in res.output
+    assert "scheduler  no eligible task" in res.output
+    assert "scheduler  completed outcome=no_eligible_task" in res.output
+    assert "Outcome: no_eligible_task" in res.output

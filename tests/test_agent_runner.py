@@ -217,3 +217,47 @@ def test_spawn_failure_is_recorded_as_failed_run(
     assert result.process_status == "spawn_failed"
     assert result.process_exit_status == "failed"
     assert result.exit_code == -1
+
+
+def test_agent_runner_emits_progress_events(
+    monkeypatch: pytest.MonkeyPatch, clean_git_repo: Path
+) -> None:
+    _patch_popen(monkeypatch, "success.ndjson", returncode=0)
+    runner = AntigravityRunner(agy_path="agy")
+
+    logged: list[tuple[str, str]] = []
+    result = runner.run(
+        task="Add a feature",
+        repo=clean_git_repo,
+        config=AgentRunConfig(model="gemini-2.5-pro"),
+        on_progress=lambda s, m: logged.append((s, m)),
+    )
+
+    assert result.exit_code == 0
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert 'agent: started provider=antigravity model="gemini-2.5-pro"' in combined
+    assert "agent: completed exit=0" in combined
+
+
+def test_agent_runner_emits_spawn_failure_progress(
+    monkeypatch: pytest.MonkeyPatch, clean_git_repo: Path
+) -> None:
+    def _raise(*args, **kwargs):
+        raise OSError("no such file or directory: agy")
+
+    monkeypatch.setattr("repoops.agent_runner._spawn_agy", _raise)
+    runner = AntigravityRunner(agy_path="agy")
+
+    logged: list[tuple[str, str]] = []
+    result = runner.run(
+        task="Add a feature",
+        repo=clean_git_repo,
+        config=AgentRunConfig(model="gemini-2.5-pro"),
+        on_progress=lambda s, m: logged.append((s, m)),
+    )
+
+    assert result.process_status == "spawn_failed"
+    messages = [f"{s}: {m}" for s, m in logged]
+    combined = "\n".join(messages)
+    assert "agent: process failure: no such file or directory: agy" in combined
