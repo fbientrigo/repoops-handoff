@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from repoops.agent_models import AgentRunConfig
 from repoops.agent_runner import select_runner
 from repoops.paths import ensure_dir
+from repoops.progress import ProgressCallback, log_progress
 from repoops.task_backlog import (
     SchedulerLock,
     SchedulerLockedError,
@@ -60,17 +61,24 @@ def run_scheduler_once(
     tasks_dir: Path | None = None,
     worktrees_dir: Path | None = None,
     locks_dir: Path | None = None,
+    on_progress: ProgressCallback | None = log_progress,
 ) -> SchedulerRunResult:
     """Execute at most ONE eligible task from the repository backlog under scheduler lock."""
     resolved_repo = Path(repo).expanduser().resolve()
     run_id = uuid.uuid4().hex
     timestamp = current_iso_timestamp()
 
+    if on_progress:
+        on_progress("scheduler", "run started")
+
     # 1. Acquire repository-level scheduler lock
     try:
         lock = SchedulerLock(resolved_repo, locks_dir=locks_dir)
         lock.acquire()
     except SchedulerLockedError as exc:
+        if on_progress:
+            on_progress("scheduler", f"lock prevented execution: {exc}")
+            on_progress("scheduler", "completed outcome=locked")
         result = SchedulerRunResult(
             scheduler_run_id=run_id,
             timestamp=timestamp,
@@ -91,6 +99,9 @@ def run_scheduler_once(
         )
 
         if selected_task is None:
+            if on_progress:
+                on_progress("scheduler", "no eligible task")
+                on_progress("scheduler", "completed outcome=no_eligible_task")
             integration_after = get_integration_head_sha(resolved_repo) or integration_before
             result = SchedulerRunResult(
                 scheduler_run_id=run_id,
@@ -103,6 +114,9 @@ def run_scheduler_once(
             persist_scheduler_run(resolved_repo, result)
             return result
 
+        if on_progress:
+            on_progress("task", f"selected {selected_task.id}")
+
         # 3. Execute task via existing task-run-next primitive
         runner = select_runner(provider)
         try:
@@ -113,8 +127,11 @@ def run_scheduler_once(
                 tasks_dir=tasks_dir,
                 worktrees_dir=worktrees_dir,
                 max_attempts=max_attempts,
+                on_progress=on_progress,
             )
         except TaskBacklogError as exc:
+            if on_progress:
+                on_progress("scheduler", "completed outcome=error")
             integration_after = get_integration_head_sha(resolved_repo) or integration_before
             result = SchedulerRunResult(
                 scheduler_run_id=run_id,
@@ -128,6 +145,8 @@ def run_scheduler_once(
             persist_scheduler_run(resolved_repo, result)
             return result
         except Exception as exc:
+            if on_progress:
+                on_progress("scheduler", "completed outcome=error")
             integration_after = get_integration_head_sha(resolved_repo) or integration_before
             result = SchedulerRunResult(
                 scheduler_run_id=run_id,
@@ -142,6 +161,8 @@ def run_scheduler_once(
             return result
 
         if exec_outcome is None:
+            if on_progress:
+                on_progress("scheduler", "completed outcome=no_eligible_task")
             integration_after = get_integration_head_sha(resolved_repo) or integration_before
             result = SchedulerRunResult(
                 scheduler_run_id=run_id,
@@ -176,6 +197,9 @@ def run_scheduler_once(
         else:
             outcome = "error"
             reason = f"Task '{task_item.id}' finished with unknown verdict: {verdict}"
+
+        if on_progress:
+            on_progress("scheduler", f"completed outcome={outcome}")
 
         result = SchedulerRunResult(
             scheduler_run_id=run_id,

@@ -45,6 +45,7 @@ from repoops.git_scan import (
 )
 from repoops.handoff import _filter_handoff_dir_from_status, redact_diff_stat
 from repoops.paths import ensure_dir
+from repoops.progress import ProgressCallback
 
 AGENT_RUNS_DIRNAME = ".repoops/agent-runs"
 
@@ -118,7 +119,14 @@ class AgentRunner(ABC):
     provider: str
 
     @abstractmethod
-    def run(self, *, task: str, repo: Path, config: AgentRunConfig) -> AgentRunResult:
+    def run(
+        self,
+        *,
+        task: str,
+        repo: Path,
+        config: AgentRunConfig,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentRunResult:
         """Execute one task in `repo` and return a normalized, persisted result."""
 
 
@@ -212,7 +220,14 @@ class AntigravityRunner(AgentRunner):
     def __init__(self, agy_path: str | None = None) -> None:
         self._agy_path_override = agy_path
 
-    def run(self, *, task: str, repo: Path, config: AgentRunConfig) -> AgentRunResult:
+    def run(
+        self,
+        *,
+        task: str,
+        repo: Path,
+        config: AgentRunConfig,
+        on_progress: ProgressCallback | None = None,
+    ) -> AgentRunResult:
         agy_path = self._agy_path_override or agy_cli.require_agy()
         repo_root = Path(repo).expanduser().resolve()
 
@@ -231,6 +246,9 @@ class AntigravityRunner(AgentRunner):
 
         started_at = _now_iso()
 
+        if on_progress:
+            on_progress("agent", f'started provider={self.provider} model="{config.model}"')
+
         argv = agy_cli.build_agy_argv(
             agy_path,
             model=config.model,
@@ -248,6 +266,8 @@ class AntigravityRunner(AgentRunner):
             proc = _spawn_agy(argv, cwd=repo_root)
         except OSError as exc:
             ended_at = _now_iso()
+            if on_progress:
+                on_progress("agent", f"process failure: {exc}")
             after = capture_git_state(repo_root)
             git_evidence = diff_git_evidence(repo_root, before, after)
             result = AgentRunResult(
@@ -329,6 +349,8 @@ class AntigravityRunner(AgentRunner):
             process_status = "timed_out"
             exit_code = -1
             process_exit_status = "failed"
+            if on_progress:
+                on_progress("agent", f"timed out after {config.timeout_seconds}s")
             if hasattr(proc, "terminate"):
                 with contextlib.suppress(Exception):
                     proc.terminate()
@@ -340,6 +362,8 @@ class AntigravityRunner(AgentRunner):
         else:
             process_status = "completed"
             process_exit_status = "success" if exit_code == 0 else "failed"
+            if on_progress:
+                on_progress("agent", f"completed exit={exit_code}")
 
         ended_at = _now_iso()
 

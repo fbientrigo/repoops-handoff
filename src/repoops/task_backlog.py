@@ -20,6 +20,7 @@ from repoops.agent_models import AgentRunConfig, AgentRunResult, ExpectedChanges
 from repoops.agent_runner import AgentRunner
 from repoops.agent_verification import run_verified_task
 from repoops.paths import atomic_write_text, ensure_dir
+from repoops.progress import ProgressCallback
 from repoops.workspace_guard import _is_path_allowed
 
 
@@ -260,9 +261,7 @@ def check_eligibility(
         if (
             repo_root
             and integration_sha
-            and not is_ancestor_commit(
-                repo_root, dep_task.promoted_commit_sha, integration_sha
-            )
+            and not is_ancestor_commit(repo_root, dep_task.promoted_commit_sha, integration_sha)
         ):
             return (
                 False,
@@ -304,6 +303,7 @@ def _is_pid_active(pid: int) -> bool:
     if sys.platform == "win32":
         try:
             import ctypes
+
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
             handle = kernel32.OpenProcess(0x1000, False, pid)
             if not handle:
@@ -398,9 +398,7 @@ class SchedulerLock:
                 lock_data = json.loads(content)
                 pid = lock_data.get("pid")
                 if pid and _is_pid_active(pid):
-                    raise SchedulerLockedError(
-                        f"Scheduler is locked by active process PID {pid}"
-                    )
+                    raise SchedulerLockedError(f"Scheduler is locked by active process PID {pid}")
             except (json.JSONDecodeError, OSError):
                 pass
             with contextlib.suppress(OSError):
@@ -592,6 +590,7 @@ def run_next_task(
     tasks_dir: Path | None = None,
     worktrees_dir: Path | None = None,
     max_attempts: int | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[TaskItem, AgentRunResult, Path] | None:
     """Execute at most ONE eligible task from the backlog in an isolated Git worktree.
 
@@ -599,9 +598,7 @@ def run_next_task(
     """
     resolved_repo = Path(repo_root).expanduser().resolve()
     backlog = load_backlog(resolved_repo, tasks_dir=tasks_dir)
-    selected_task = select_next_task(
-        backlog, repo_root=resolved_repo, max_attempts=max_attempts
-    )
+    selected_task = select_next_task(backlog, repo_root=resolved_repo, max_attempts=max_attempts)
 
     if selected_task is None:
         return None
@@ -620,10 +617,14 @@ def run_next_task(
         selected_task.baseline_ref = INTEGRATION_BRANCH_NAME
         selected_task.baseline_sha = baseline_sha
         save_task(resolved_repo, selected_task, tasks_dir=tasks_dir)
+        if on_progress:
+            on_progress("git", "worktree ready")
 
         try:
             contract = selected_task.to_task_contract()
-            result = run_verified_task(runner, contract, wt_path, config=config)
+            result = run_verified_task(
+                runner, contract, wt_path, config=config, on_progress=on_progress
+            )
 
             selected_task.last_run_id = result.run_id
             selected_task.last_verdict = result.verdict
@@ -640,6 +641,9 @@ def run_next_task(
                     selected_task.last_failure_reason = None
                     save_task(resolved_repo, selected_task, tasks_dir=tasks_dir)
 
+                    if on_progress and prom_sha:
+                        on_progress("promote", f"{INTEGRATION_BRANCH_NAME} -> {prom_sha[:7]}")
+
                     # Remove worktree cleanly after successful promotion
                     subprocess.run(
                         ["git", "worktree", "remove", "--force", str(wt_path)],
@@ -652,6 +656,8 @@ def run_next_task(
                     selected_task.promotion_status = "failed"
                     selected_task.last_failure_reason = prom_err
                     save_task(resolved_repo, selected_task, tasks_dir=tasks_dir)
+                    if on_progress:
+                        on_progress("promote", f"failed: {prom_err}")
             else:
                 selected_task.status = "failed"
                 selected_task.promotion_status = "not_applicable"

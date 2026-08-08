@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from repoops.agent_models import AcceptanceResult, TaskContract
+from repoops.progress import ProgressCallback
 
 
 def _now_iso() -> str:
@@ -18,6 +19,7 @@ def run_acceptance_commands(
     repo_root: Path,
     *,
     timeout_seconds: int = 300,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[str, list[AcceptanceResult]]:
     """Execute TaskContract acceptance commands independently in repo_root.
 
@@ -29,8 +31,11 @@ def run_acceptance_commands(
 
     resolved_root = repo_root.resolve()
     results: list[AcceptanceResult] = []
+    total = len(contract.acceptance)
 
-    for cmd in contract.acceptance:
+    for idx, cmd in enumerate(contract.acceptance, start=1):
+        if on_progress:
+            on_progress("verify", f"acceptance {idx}/{total} started: {cmd}")
         started_at = _now_iso()
         timed_out = False
         try:
@@ -67,6 +72,15 @@ def run_acceptance_commands(
                 timed_out=timed_out,
             )
         )
+        if on_progress:
+            if timed_out:
+                on_progress(
+                    "verify", f"acceptance {idx}/{total} FAIL (timed out after {timeout_seconds}s)"
+                )
+            elif passed:
+                on_progress("verify", f"acceptance {idx}/{total} PASS")
+            else:
+                on_progress("verify", f"acceptance {idx}/{total} FAIL exit={exit_code}")
 
     all_passed = all(r.passed for r in results)
     acceptance_status = "passed" if all_passed else "failed"
