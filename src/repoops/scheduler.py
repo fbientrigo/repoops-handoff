@@ -180,8 +180,12 @@ def run_scheduler_once(
 
         verdict = agent_result.verdict
         if verdict == "verified":
-            outcome = "task_verified"
-            reason = f"Task '{task_item.id}' verified and promoted successfully"
+            if task_item.promotion_status == "failed":
+                outcome = "task_failed"
+                reason = task_item.last_failure_reason or f"Task '{task_item.id}' promotion failed"
+            else:
+                outcome = "task_verified"
+                reason = f"Task '{task_item.id}' verified and promoted successfully"
         elif verdict == "failed":
             outcome = "task_failed"
             reason = (
