@@ -210,3 +210,17 @@ Behavior:
 - `--format` only accepts `csv`; any other value raises a `BadParameter` error before the store is opened;
 - prints the export path;
 - does not generate a payroll or invoice report — the CSV is raw candidate evidence only.
+
+
+## `repoops demo`
+
+Purpose: explain the core checkpoint/resume workflow in a few seconds without requiring
+configuration and without touching the filesystem or Git state.
+
+Contract:
+
+- takes no configuration and performs no Git commands;
+- writes no files;
+- prints an illustrative checkpoint/resume transcript;
+- points the user to the two real commands: `repoops checkpoint .` and `repoops resume .`;
+- remains safe to run from any directory, including outside a Git repository.

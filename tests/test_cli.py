@@ -181,3 +181,14 @@ def test_cli_filtering_and_excluded_repos_not_scanned(tmp_path: Path, clean_git_
     assert "No repositories matched requested filters" in res_nomatch.output
     assert "Known projects: broken, thesis" in res_nomatch.output
     assert "Known tags: broken, ship, thesis" in res_nomatch.output
+
+
+def test_demo_is_zero_config_and_explains_handoff() -> None:
+    result = runner.invoke(app, ["demo"])
+
+    assert result.exit_code == 0, result.output
+    assert "read-only and changes nothing" in result.output
+    assert "$ repoops checkpoint ." in result.output
+    assert "$ repoops resume ." in result.output
+    assert ".repoops/HANDOFF.md" in result.output
+    assert "Overall drift: NONE" in result.output
