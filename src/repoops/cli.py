@@ -21,7 +21,7 @@ from repoops.worklog import (
     write_candidates_csv,
 )
 
-app = typer.Typer(help="Low-noise multi-repository status and coding-agent handoff CLI.")
+app = typer.Typer(help="Deterministic Git checkpoints and safe coding-agent handoffs.")
 
 
 FETCH_OPTION_HELP = (
@@ -55,8 +55,39 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """Low-noise multi-repository status reporter."""
+    """Deterministic Git checkpoints and safe coding-agent handoffs."""
     pass
+
+
+DEMO_TRANSCRIPT = """\\
+Example transcript — repoops demo itself is read-only and changes nothing.
+
+$ repoops checkpoint .
+Checkpoint written: .repoops/handoff.json
+Handoff markdown: .repoops/HANDOFF.md
+
+# New agent or new session
+$ repoops resume .
+RepoOps resume
+Overall drift: NONE
+Branch: main
+HEAD: matches checkpoint
+Worktree: matches checkpoint
+Next action: run the failing unit test and fix only that path
+
+Instead of asking the next agent to rediscover the repository, hand it
+.repoops/HANDOFF.md and let repoops resume . verify that the Git state still matches.
+
+Try it in a real repository:
+  repoops checkpoint .
+  repoops resume .
+"""
+
+
+@app.command()
+def demo() -> None:
+    """Show the checkpoint/resume workflow without touching files or Git state."""
+    typer.echo(DEMO_TRANSCRIPT.rstrip())
 
 
 @app.command()
