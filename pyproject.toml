@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "repoops-handoff"
 version = "0.1.0"
-description = "Low-noise multi-repository status and coding-agent handoff CLI."
+description = "Deterministic Git checkpoints and safe handoffs between coding-agent sessions."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -19,6 +19,9 @@ keywords = [
   "status",
   "handoff",
   "agent",
+  "coding-agent",
+  "codex",
+  "claude-code",
   "worklog",
   "cli",
 ]
